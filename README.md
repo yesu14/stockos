@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # StockOS - 재고관리 시스템
 
 ## 기술 스택
@@ -145,3 +146,7 @@ src/
 - 상품 이미지 업로드 (Supabase Storage)
 - 판매 기록 / 출고 기능
 - 알림 센터 (low stock 자동 알림)
+=======
+# stockos
+재고관리
+>>>>>>> eac3f7fc7959b3a140609ba22b1ee39b4a66e996
