@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import {
-  CheckCircle, XCircle, UserCog, Trash2, ChevronDown, ChevronRight,
-  Clock, Search, Pencil, X, Save, Shield, Eye, EyeOff, Monitor,
-  Smartphone, MapPin, Globe, Wifi
+  CheckCircle, Trash2, ChevronDown, ChevronRight,
+  Clock, Search, Pencil, X, Save, Shield,
+  Monitor, MapPin, Wifi
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -29,6 +29,43 @@ function parseUA(ua = '') {
   return { device, os, browser }
 }
 
+// IP → 한글 위치 변환 (ip-api.com 무료, HTTP)
+const geoCache = {}
+async function geocodeIP(ip) {
+  if (!ip || ['localhost', '127.0.0.1', '::1', ''].includes(ip)) return null
+  if (geoCache[ip] !== undefined) return geoCache[ip]
+  try {
+    // ip-api.com 는 http만 무료 지원 (https는 유료)
+    const res = await fetch(`http://ip-api.com/json/${ip}?lang=ko&fields=status,regionName,city`)
+    if (!res.ok) { geoCache[ip] = null; return null }
+    const d = await res.json()
+    if (d.status === 'success') {
+      const loc = [d.regionName, d.city].filter(Boolean).join(' ')
+      geoCache[ip] = loc || null
+    } else {
+      geoCache[ip] = null
+    }
+  } catch {
+    geoCache[ip] = null
+  }
+  return geoCache[ip]
+}
+
+async function enrichLogsWithLocation(logs) {
+  const enriched = [...logs]
+  for (const log of enriched) {
+    if (!log.location && log.ip_address) {
+      const loc = await geocodeIP(log.ip_address)
+      if (loc) {
+        log.location = loc
+        // 백그라운드로 DB 저장
+        supabase.from('login_logs').update({ location: loc }).eq('id', log.id).then(() => {})
+      }
+    }
+  }
+  return enriched
+}
+
 function LogRow({ log }) {
   const { device, os, browser } = parseUA(log.device_info)
   const dt = new Date(log.created_at)
@@ -40,28 +77,25 @@ function LogRow({ log }) {
         <div className="font-medium">{dateStr}</div>
         <div className="text-surface-500">{timeStr}</div>
       </div>
-      <div className="col-span-2 flex items-center gap-1.5 text-surface-300">
-        {log.ip_address ? (
-          <><Wifi size={10} className="text-surface-500 shrink-0" /><span className="font-mono">{log.ip_address}</span></>
-        ) : <span className="text-surface-600">-</span>}
+      <div className="col-span-2 flex items-start gap-1 text-surface-300 pt-0.5">
+        {log.ip_address
+          ? <><Wifi size={10} className="text-surface-500 shrink-0 mt-0.5" /><span className="font-mono break-all">{log.ip_address}</span></>
+          : <span className="text-surface-600">-</span>}
       </div>
-      <div className="col-span-2 flex items-center gap-1.5 text-surface-300">
-        {log.location ? (
-          <><MapPin size={10} className="text-surface-500 shrink-0" /><span>{log.location}</span></>
-        ) : <span className="text-surface-600">-</span>}
+      <div className="col-span-3 flex items-center gap-1 text-surface-300">
+        {log.location
+          ? <><MapPin size={10} className="text-rose-400 shrink-0" /><span className="text-emerald-300">{log.location}</span></>
+          : <span className="text-surface-600 text-[10px]">위치 없음</span>}
       </div>
       <div className="col-span-3 text-surface-300">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <Monitor size={10} className="text-surface-500 shrink-0" />
           <span>{device}</span>
           {os && <span className="text-surface-500">/ {os}</span>}
         </div>
         {browser && <div className="text-surface-500 ml-4">{browser}</div>}
       </div>
-      <div className="col-span-2 text-surface-400 truncate" title={log.device_info || ''}>
-        {log.device_fingerprint ? <span className="font-mono text-[10px] text-surface-600">{log.device_fingerprint.slice(0, 10)}...</span> : '-'}
-      </div>
-      <div className="col-span-1 flex items-center justify-end">
+      <div className="col-span-2 flex items-center justify-end">
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${log.success !== false ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
           {log.success !== false ? '성공' : '실패'}
         </span>
@@ -129,10 +163,10 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('')
   const [editUser, setEditUser] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
-  const [filterStatus, setFilterStatus] = useState('all') // all | pending | approved
+  const [filterStatus, setFilterStatus] = useState('all')
   const [allLogs, setAllLogs] = useState([])
   const [allLogsLoading, setAllLogsLoading] = useState(false)
-  const [viewMode, setViewMode] = useState('users') // users | all-logs
+  const [viewMode, setViewMode] = useState('users')
 
   useEffect(() => { loadUsers() }, [])
 
@@ -140,14 +174,9 @@ export default function AdminUsersPage() {
     setLoading(true)
     try {
       const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
-      if (error) {
-        console.error('Profiles load error:', error)
-        toast.error('사용자 목록 로드 실패 - RLS 설정 확인 필요')
-      }
+      if (error) toast.error('사용자 목록 로드 실패')
       setUsers(data || [])
-    } catch(err) {
-      console.error(err)
-    }
+    } catch(err) { console.error(err) }
     setLoading(false)
   }
 
@@ -166,15 +195,38 @@ export default function AdminUsersPage() {
   async function loadLogs(userId) {
     if (expandedId === userId) { setExpandedId(null); return }
     setExpandedId(userId); setLogsLoading(true)
-    const { data } = await supabase.from('login_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50)
-    setLoginLogs(data || [])
+    try {
+      const { data } = await supabase.from('login_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50)
+      const enriched = await enrichLogsWithLocation(data || [])
+      setLoginLogs(enriched)
+    } catch(err) { console.error(err) }
     setLogsLoading(false)
   }
 
   async function loadAllLogs() {
     setAllLogsLoading(true)
-    const { data } = await supabase.from('login_logs').select('*, profiles(name, email)').order('created_at', { ascending: false }).limit(200)
-    setAllLogs(data || [])
+    try {
+      // Step 1: login_logs만 조회 (profiles JOIN 오류 방지)
+      const { data: logData, error: logErr } = await supabase
+        .from('login_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200)
+      if (logErr) { toast.error('로그 로드 실패: ' + logErr.message); setAllLogsLoading(false); return }
+
+      // Step 2: profiles 별도 조회 후 매핑
+      const userIds = [...new Set((logData || []).map(l => l.user_id).filter(Boolean))]
+      let profileMap = {}
+      if (userIds.length > 0) {
+        const { data: profData } = await supabase.from('profiles').select('id, name, email').in('id', userIds)
+        ;(profData || []).forEach(p => { profileMap[p.id] = p })
+      }
+      const logs = (logData || []).map(l => ({ ...l, _profile: profileMap[l.user_id] || null }))
+
+      // Step 3: IP → 한글 위치 변환
+      const enriched = await enrichLogsWithLocation(logs)
+      setAllLogs(enriched)
+    } catch(err) { console.error(err); toast.error('오류: ' + err.message) }
     setAllLogsLoading(false)
   }
 
@@ -205,6 +257,9 @@ export default function AdminUsersPage() {
           <button onClick={() => setViewMode('all-logs')} className={'px-4 py-2 rounded-xl text-sm font-medium transition-colors ' + (viewMode === 'all-logs' ? 'bg-primary-500 text-white' : 'bg-surface-800 text-surface-400 hover:text-white')}>
             전체 로그인 기록
           </button>
+          <a href="/admin/menus" className="px-4 py-2 rounded-xl text-sm font-medium transition-colors bg-surface-800 text-surface-400 hover:text-white">
+            메뉴 관리
+          </a>
         </div>
       </div>
 
@@ -222,14 +277,12 @@ export default function AdminUsersPage() {
             <h2 className="font-semibold text-white text-sm">전체 로그인 기록 (최근 200건)</h2>
             <button onClick={loadAllLogs} className="text-xs text-primary-400 hover:text-primary-300">새로고침</button>
           </div>
-          {/* 헤더 */}
           <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-surface-800/40 text-xs font-semibold text-surface-500 uppercase tracking-wide border-b border-surface-800">
             <div className="col-span-2">사용자</div>
             <div className="col-span-2">날짜/시간</div>
             <div className="col-span-2">IP 주소</div>
-            <div className="col-span-2">위치</div>
+            <div className="col-span-3">위치</div>
             <div className="col-span-3">디바이스</div>
-            <div className="col-span-1 text-right">결과</div>
           </div>
           {allLogsLoading ? (
             <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
@@ -237,32 +290,39 @@ export default function AdminUsersPage() {
             <p className="text-center py-8 text-surface-500 text-sm">로그인 기록이 없습니다</p>
           ) : (
             <div className="max-h-[65vh] overflow-y-auto">
-              {allLogs.map(log => (
-                <div key={log.id} className="grid grid-cols-12 gap-2 px-3 py-2.5 border-b border-surface-800/40 hover:bg-surface-800/20 transition-colors text-xs">
-                  <div className="col-span-2 text-surface-300">
-                    <div className="font-medium truncate">{log.profiles?.name || '-'}</div>
-                    <div className="text-surface-500 truncate">{log.profiles?.email || '-'}</div>
+              {allLogs.map(log => {
+                const { device, os, browser } = parseUA(log.device_info)
+                const dt = new Date(log.created_at)
+                return (
+                  <div key={log.id} className="grid grid-cols-12 gap-2 px-3 py-2.5 border-b border-surface-800/40 hover:bg-surface-800/20 transition-colors text-xs">
+                    <div className="col-span-2 text-surface-300">
+                      <div className="font-medium truncate">{log._profile?.name || '-'}</div>
+                      <div className="text-surface-500 truncate">{log._profile?.email || '-'}</div>
+                    </div>
+                    <div className="col-span-2 text-surface-300">
+                      <div>{dt.toLocaleDateString('ko-KR')}</div>
+                      <div className="text-surface-500">{dt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+                    </div>
+                    <div className="col-span-2 flex items-start gap-1 text-surface-300 pt-0.5">
+                      {log.ip_address ? <><Wifi size={10} className="text-surface-500 shrink-0 mt-0.5" /><span className="font-mono break-all">{log.ip_address}</span></> : <span className="text-surface-600">-</span>}
+                    </div>
+                    <div className="col-span-3 flex items-center gap-1 text-surface-300">
+                      {log.location
+                        ? <><MapPin size={10} className="text-rose-400 shrink-0" /><span className="text-emerald-300">{log.location}</span></>
+                        : <span className="text-surface-600 text-[10px]">-</span>}
+                    </div>
+                    <div className="col-span-2 text-surface-300">
+                      <div>{device}{os ? ` / ${os}` : ''}</div>
+                      {browser && <div className="text-surface-500">{browser}</div>}
+                    </div>
+                    <div className="col-span-1 flex items-center justify-end">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${log.success !== false ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                        {log.success !== false ? '성공' : '실패'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="col-span-2 text-surface-300">
-                    <div>{new Date(log.created_at).toLocaleDateString('ko-KR')}</div>
-                    <div className="text-surface-500">{new Date(log.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
-                  </div>
-                  <div className="col-span-2 flex items-center gap-1 text-surface-300">
-                    {log.ip_address ? <><Wifi size={10} className="text-surface-500 shrink-0" /><span className="font-mono">{log.ip_address}</span></> : <span className="text-surface-600">-</span>}
-                  </div>
-                  <div className="col-span-2 flex items-center gap-1 text-surface-300">
-                    {log.location ? <><MapPin size={10} className="text-surface-500 shrink-0" />{log.location}</> : <span className="text-surface-600">-</span>}
-                  </div>
-                  <div className="col-span-3 text-surface-300">
-                    {(() => { const p = parseUA(log.device_info); return <><div>{p.device} {p.os && <span className="text-surface-500">/ {p.os}</span>}</div>{p.browser && <div className="text-surface-500">{p.browser}</div>}</> })()}
-                  </div>
-                  <div className="col-span-1 flex items-center justify-end">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${log.success !== false ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
-                      {log.success !== false ? '성공' : '실패'}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -286,7 +346,6 @@ export default function AdminUsersPage() {
           </div>
 
           <div className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden">
-            {/* 테이블 헤더 */}
             <div className="grid grid-cols-12 gap-2 px-4 py-3 bg-surface-800/50 border-b border-surface-800 text-xs font-semibold text-surface-400 uppercase tracking-wide">
               <div className="col-span-3">이름 / 이메일</div>
               <div className="col-span-2">상태</div>
@@ -327,8 +386,8 @@ export default function AdminUsersPage() {
                           </button>
                         )}
                         <button onClick={() => loadLogs(u.id)}
-                          className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors ${expandedId === u.id ? 'bg-primary-500/20 text-primary-400' : 'bg-surface-700 hover:bg-surface-600 text-surface-400'}`}>
-                          <Clock size={11} /> 로그
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${expandedId === u.id ? 'bg-primary-500/20 text-primary-400' : 'bg-surface-700 hover:bg-surface-600 text-surface-400'}`}>
+                          <Clock size={11} /> 로그인 기록
                           {expandedId === u.id ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                         </button>
                         <button onClick={() => setEditUser(u)}
@@ -342,16 +401,14 @@ export default function AdminUsersPage() {
                       </div>
                     </div>
 
-                    {/* 로그인 기록 펼침 */}
                     {expandedId === u.id && (
                       <div className="border-t border-surface-800/50 bg-surface-800/10">
                         <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-surface-800/30 text-[10px] font-semibold text-surface-500 uppercase tracking-wide border-b border-surface-700/30">
                           <div className="col-span-2">날짜/시간</div>
                           <div className="col-span-2">IP 주소</div>
-                          <div className="col-span-2">위치</div>
+                          <div className="col-span-3">위치</div>
                           <div className="col-span-3">디바이스</div>
-                          <div className="col-span-2">핑거프린트</div>
-                          <div className="col-span-1 text-right">결과</div>
+                          <div className="col-span-2 text-right">결과</div>
                         </div>
                         {logsLoading ? (
                           <div className="flex justify-center py-3"><div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
@@ -372,10 +429,8 @@ export default function AdminUsersPage() {
         </>
       )}
 
-      {/* 편집 모달 */}
       {editUser && <EditModal user={editUser} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); loadUsers() }} />}
 
-      {/* 삭제 확인 모달 */}
       {confirmDelete && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-surface-900 border border-surface-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">

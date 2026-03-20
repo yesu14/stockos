@@ -1,24 +1,37 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
+import { THEMES } from '../../context/ThemeContext'
 import {
-  LayoutDashboard, Package, PackageCheck, Boxes, Shield,
-  Users, Menu as MenuIcon, MapPin, ChevronDown, ChevronRight,
-  LogOut, X, Globe, Bell, BellRing, Building2, PanelLeftClose, PanelLeftOpen, AlertCircle
+  LayoutDashboard, Package, Boxes, Shield, Menu as MenuIcon,
+  LogOut, X, Bell, BellRing, PanelLeftClose, PanelLeftOpen,
+  RotateCcw, ShoppingCart, ArrowDownCircle, ArrowUpCircle,
+  Settings, Star, FileText, Bell as BellIcon, Tag, Layers, Palette
 } from 'lucide-react'
 
-const ICONS = { LayoutDashboard, Package, PackageCheck, Boxes, Shield, Users, MenuIcon, MapPin, Building2 }
-const LANG_OPTIONS = [
-  { code: 'ko', label: '한국어', flag: '🇰🇷' },
-  { code: 'zh', label: '中文', flag: '🇨🇳' },
-  { code: 'en', label: 'English', flag: '🇺🇸' },
-]
 const ROLE_LABELS = { admin: '관리자', manager: '매니저', viewer: '일반사용자', pending: '승인대기' }
 
+const ICON_MAP = {
+  LayoutDashboard, Package, Boxes, Shield,
+  RotateCcw, ShoppingCart, ArrowDownCircle, ArrowUpCircle,
+  Settings, Star, FileText, Bell: BellIcon, Tag, Layers
+}
+function getIcon(name) { return ICON_MAP[name] || Package }
+
+const FALLBACK_MENUS = [
+  { id: 'f1', menu_key: 'dashboard', label: '대시보드', url: '/dashboard', icon_name: 'LayoutDashboard', required_role: 'viewer',  sort_order: 1 },
+  { id: 'f2', menu_key: 'products',  label: '상품관리',  url: '/products',  icon_name: 'Package',         required_role: 'manager', sort_order: 2 },
+  { id: 'f3', menu_key: 'inventory', label: '재고관리',  url: '/inventory', icon_name: 'Boxes',           required_role: 'viewer',  sort_order: 3 },
+  { id: 'f4', menu_key: 'inbound',   label: '입고관리',  url: '/inbound',   icon_name: 'ArrowDownCircle', required_role: 'manager', sort_order: 4 },
+  { id: 'f5', menu_key: 'outbound',  label: '납품관리',  url: '/outbound',  icon_name: 'ArrowUpCircle',   required_role: 'manager', sort_order: 5 },
+  { id: 'f6', menu_key: 'returns',   label: '반품관리',  url: '/returns',   icon_name: 'RotateCcw',       required_role: 'manager', sort_order: 6 },
+  { id: 'f7', menu_key: 'sales',     label: '오늘판매',  url: '/sales',     icon_name: 'ShoppingCart',    required_role: 'viewer',  sort_order: 7 },
+]
+
+const ROLE_LVL = { admin: 3, manager: 2, viewer: 1 }
+
 export default function Layout() {
-  const { i18n } = useTranslation()
   const { profile, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -26,30 +39,40 @@ export default function Layout() {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem('sidebar_collapsed') === 'true' } catch { return false }
   })
-  const [menus, setMenus] = useState([])
-  const [expandedMenus, setExpandedMenus] = useState({})
-  const [showLangMenu, setShowLangMenu] = useState(false)
   const [alertCount, setAlertCount] = useState(0)
+  const [dbMenus, setDbMenus] = useState(null)
+  const [theme, setThemeState] = useState(() => {
+    try { return localStorage.getItem('stockos_theme') || 'dark' } catch { return 'dark' }
+  })
+  const [showThemePicker, setShowThemePicker] = useState(false)
 
-  useEffect(() => { loadMenus() }, [profile])
   useEffect(() => { loadAlertCount() }, [location.pathname])
+  useEffect(() => { loadMenus() }, [])
+  useEffect(() => { applyTheme(theme) }, [])
 
-  function toggleCollapse() {
-    const next = !collapsed
-    setCollapsed(next)
-    try { localStorage.setItem('sidebar_collapsed', String(next)) } catch {}
+  // Close theme picker when clicking outside
+  useEffect(() => {
+    if (!showThemePicker) return
+    function handle(e) { if (!e.target.closest('[data-theme-picker]')) setShowThemePicker(false) }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [showThemePicker])
+
+  function applyTheme(t) {
+    const root = document.documentElement
+    Object.values(THEMES).forEach(td => root.classList.remove(td.classes))
+    const themeData = THEMES[t] || THEMES.dark
+    root.classList.add(themeData.classes)
+    try { localStorage.setItem('stockos_theme', t) } catch {}
   }
 
+  function setTheme(t) { setThemeState(t); applyTheme(t) }
+
   async function loadMenus() {
-    const { data } = await supabase.from('menus').select('*').eq('is_active', true).order('sort_order')
-    if (!data) return
-    const roleMap = { admin: 3, manager: 2, viewer: 1 }
-    const userLevel = roleMap[profile?.role] || 0
-    const permMap = { admin: 3, manager: 2, viewer: 1 }
-    const filtered = data.filter(m => (permMap[m.permission_role] || 1) <= userLevel && m.url !== '/stock-alerts' && m.url !== '/categories')
-    const roots = filtered.filter(m => !m.parent_id)
-    const children = filtered.filter(m => m.parent_id)
-    setMenus(roots.map(r => ({ ...r, children: children.filter(c => c.parent_id === r.id) })))
+    try {
+      const { data } = await supabase.from('menus').select('*').eq('is_active', true).order('sort_order')
+      setDbMenus(data && data.length > 0 ? data : null)
+    } catch { setDbMenus(null) }
   }
 
   async function loadAlertCount() {
@@ -64,18 +87,82 @@ export default function Layout() {
     } catch { setAlertCount(0) }
   }
 
-  function getMenuName(menu) {
-    const lang = i18n.language
-    return menu[`name_${lang}`] || menu.name_ko || menu.name_en
+  function toggleCollapse() {
+    const next = !collapsed
+    setCollapsed(next)
+    try { localStorage.setItem('sidebar_collapsed', String(next)) } catch {}
   }
-  function changeLanguage(code) { i18n.changeLanguage(code); localStorage.setItem('lang', code); setShowLangMenu(false) }
+
   async function handleLogout() { await logout(); navigate('/login') }
-  const currentLang = LANG_OPTIONS.find(l => l.code === i18n.language) || LANG_OPTIONS[0]
+
+  const role = profile?.role || 'viewer'
+  const userLvl = ROLE_LVL[role] || 0
+  const sourceMenus = dbMenus || FALLBACK_MENUS
+  const visibleMenus = sourceMenus.filter(m => (ROLE_LVL[m.required_role] || 1) <= userLvl)
+  const adminMenu = role === 'admin'
+    ? [{ id: '_admin', label: '관리자', url: '/admin/users', icon_name: 'Shield', required_role: 'admin' }]
+    : []
+  const allMenus = [...visibleMenus, ...adminMenu]
+
+  // ── 테마 선택기 컴포넌트 ──────────────────────────────
+  function ThemePicker({ isMobile = false }) {
+    if (collapsed && !isMobile) {
+      return (
+        <div className="relative" data-theme-picker>
+          <button onClick={() => setShowThemePicker(p => !p)}
+            title="테마 변경"
+            className="flex items-center justify-center p-2.5 rounded-xl transition-colors text-surface-400 hover:bg-surface-800 hover:text-white w-full">
+            <Palette size={18} />
+          </button>
+          {showThemePicker && (
+            <div className="absolute left-full ml-2 bottom-0 w-52 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl z-50 p-1.5">
+              <p className="text-[10px] text-surface-500 px-2 py-1 font-medium uppercase tracking-wide">테마 선택</p>
+              {Object.entries(THEMES).map(([key, td]) => (
+                <button key={key} onClick={() => { setTheme(key); setShowThemePicker(false) }}
+                  className={'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ' +
+                    (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-surface-800 hover:text-white')}>
+                  <div className="w-4 h-4 rounded-full border border-surface-600 shrink-0"
+                    style={{ background: td.primary }} />
+                  {td.name}
+                  {theme === key && <span className="ml-auto">✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+    return (
+      <div className="relative" data-theme-picker>
+        <button onClick={() => setShowThemePicker(p => !p)}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors w-full text-surface-300 hover:bg-surface-800 hover:text-white">
+          <Palette size={17} className="shrink-0" />
+          테마 변경
+          <span className="ml-auto text-xs text-surface-500">{THEMES[theme]?.name || ''}</span>
+        </button>
+        {showThemePicker && (
+          <div className="absolute bottom-full left-0 mb-1 w-52 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl z-50 p-1.5">
+            <p className="text-[10px] text-surface-500 px-2 py-1 font-medium uppercase tracking-wide">테마 선택</p>
+            {Object.entries(THEMES).map(([key, td]) => (
+              <button key={key} onClick={() => { setTheme(key); setShowThemePicker(false) }}
+                className={'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ' +
+                  (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-surface-800 hover:text-white')}>
+                <div className="w-4 h-4 rounded-full border border-surface-600 shrink-0"
+                  style={{ background: td.primary }} />
+                {td.name}
+                {theme === key && <span className="ml-auto">✓</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   function SidebarContent({ onNav, isMobile = false }) {
     return (
       <div className="flex flex-col h-full">
-        {/* 로고 + 접기 버튼 */}
+        {/* 로고 */}
         <div className={`flex items-center border-b border-surface-800 shrink-0 ${collapsed && !isMobile ? 'px-3 py-4 justify-center' : 'px-4 py-4'}`}>
           {(!collapsed || isMobile) && (
             <>
@@ -126,12 +213,10 @@ export default function Layout() {
             </div>
           </div>
         )}
-
-        {/* 접힌 상태 아바타 */}
         {collapsed && !isMobile && (
           <div className="flex flex-col items-center py-3 border-b border-surface-800 shrink-0 gap-2">
             <div className="relative">
-              <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-700 rounded-full flex items-center justify-center text-white font-bold text-xs shadow cursor-pointer" title={profile?.name}>
+              <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-700 rounded-full flex items-center justify-center text-white font-bold text-xs shadow" title={profile?.name}>
                 {profile?.name?.[0]?.toUpperCase() || 'U'}
               </div>
               {alertCount > 0 && (
@@ -148,17 +233,11 @@ export default function Layout() {
 
         {/* 메뉴 */}
         <nav className={`flex-1 py-3 overflow-y-auto overflow-x-hidden space-y-0.5 ${collapsed && !isMobile ? 'px-2' : 'px-3'}`}>
-          {menus.filter(m => m.permission_role !== 'admin').map(menu => {
-            const Icon = ICONS[menu.icon] || Package
-            const hasChildren = menu.children?.length > 0
-            const isExpanded = expandedMenus[menu.id]
-
+          {allMenus.map(menu => {
+            const Icon = getIcon(menu.icon_name)
             if (collapsed && !isMobile) {
-              // Collapsed: icon only, no children expand
               return (
-                <NavLink key={menu.id} to={hasChildren ? (menu.children[0]?.url || '#') : (menu.url || '#')}
-                  onClick={onNav}
-                  title={getMenuName(menu)}
+                <NavLink key={menu.id} to={menu.url} onClick={onNav} title={menu.label}
                   className={({ isActive }) =>
                     'flex items-center justify-center p-2.5 rounded-xl transition-colors ' +
                     (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-400 hover:bg-surface-800 hover:text-white')
@@ -167,49 +246,22 @@ export default function Layout() {
                 </NavLink>
               )
             }
-
             return (
-              <div key={menu.id}>
-                {hasChildren ? (
-                  <>
-                    <button onClick={() => setExpandedMenus(p => ({ ...p, [menu.id]: !p[menu.id] }))}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-surface-300 hover:bg-surface-800 hover:text-white transition-colors">
-                      <Icon size={17} className="shrink-0" />
-                      <span className="flex-1 text-sm font-medium text-left">{getMenuName(menu)}</span>
-                      {isExpanded ? <ChevronDown size={13} className="text-surface-500 shrink-0" /> : <ChevronRight size={13} className="text-surface-500 shrink-0" />}
-                    </button>
-                    {isExpanded && (
-                      <div className="ml-3 pl-3 border-l border-surface-700/50 my-0.5 space-y-0.5">
-                        {menu.children.map(child => {
-                          const CIcon = ICONS[child.icon] || Package
-                          return (
-                            <NavLink key={child.id} to={child.url || '#'} onClick={onNav}
-                              className={({ isActive }) =>
-                                'flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-colors ' +
-                                (isActive ? 'bg-primary-500/20 text-primary-400 font-medium' : 'text-surface-400 hover:bg-surface-800 hover:text-white')
-                              }>
-                              <CIcon size={15} className="shrink-0" />{getMenuName(child)}
-                            </NavLink>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <NavLink to={menu.url || '#'} onClick={onNav}
-                    className={({ isActive }) =>
-                      'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ' +
-                      (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-300 hover:bg-surface-800 hover:text-white')
-                    }>
-                    <Icon size={17} className="shrink-0" />{getMenuName(menu)}
-                  </NavLink>
-                )}
-              </div>
+              <NavLink key={menu.id} to={menu.url} onClick={onNav}
+                className={({ isActive }) =>
+                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ' +
+                  (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-300 hover:bg-surface-800 hover:text-white')
+                }>
+                <Icon size={17} className="shrink-0" />
+                {menu.label}
+              </NavLink>
             )
           })}
+        </nav>
 
-          {/* 재고부족 알리미 - 고정 메뉴 (admin 메뉴 위) */}
-          {['admin','manager'].includes(profile?.role) && (
+        {/* 하단: 재고부족 알리미 + 테마 변경 */}
+        <div className={`border-t border-surface-800 py-2 space-y-0.5 ${collapsed && !isMobile ? 'px-2' : 'px-3'}`}>
+          {['admin', 'manager'].includes(profile?.role) && (
             collapsed && !isMobile ? (
               <NavLink to="/stock-alerts" onClick={onNav} title="재고부족 알리미"
                 className={({ isActive }) =>
@@ -235,76 +287,17 @@ export default function Layout() {
               </NavLink>
             )
           )}
-
-          {/* 관리자 전용 메뉴 */}
-          {menus.filter(m => m.permission_role === 'admin').map(menu => {
-            const Icon = ICONS[menu.icon] || Package
-            const hasChildren = menu.children?.length > 0
-            const isExpanded = expandedMenus[menu.id]
-            if (collapsed && !isMobile) {
-              return (
-                <NavLink key={menu.id} to={hasChildren ? (menu.children[0]?.url || '#') : (menu.url || '#')}
-                  onClick={onNav} title={getMenuName(menu)}
-                  className={({ isActive }) =>
-                    'flex items-center justify-center p-2.5 rounded-xl transition-colors ' +
-                    (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-400 hover:bg-surface-800 hover:text-white')
-                  }>
-                  <Icon size={18} />
-                </NavLink>
-              )
-            }
-            return (
-              <div key={menu.id}>
-                {hasChildren ? (
-                  <>
-                    <button onClick={() => setExpandedMenus(p => ({ ...p, [menu.id]: !p[menu.id] }))}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-surface-300 hover:bg-surface-800 hover:text-white transition-colors">
-                      <Icon size={17} className="shrink-0" />
-                      <span className="flex-1 text-sm font-medium text-left">{getMenuName(menu)}</span>
-                      {isExpanded ? <ChevronDown size={13} className="text-surface-500 shrink-0" /> : <ChevronRight size={13} className="text-surface-500 shrink-0" />}
-                    </button>
-                    {isExpanded && (
-                      <div className="ml-3 pl-3 border-l border-surface-700/50 my-0.5 space-y-0.5">
-                        {menu.children.map(child => {
-                          const CIcon = ICONS[child.icon] || Package
-                          return (
-                            <NavLink key={child.id} to={child.url || '#'} onClick={onNav}
-                              className={({ isActive }) =>
-                                'flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-colors ' +
-                                (isActive ? 'bg-primary-500/20 text-primary-400 font-medium' : 'text-surface-400 hover:bg-surface-800 hover:text-white')
-                              }>
-                              <CIcon size={15} className="shrink-0" />{getMenuName(child)}
-                            </NavLink>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <NavLink to={menu.url || '#'} onClick={onNav}
-                    className={({ isActive }) =>
-                      'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ' +
-                      (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-300 hover:bg-surface-800 hover:text-white')
-                    }>
-                    <Icon size={17} className="shrink-0" />{getMenuName(menu)}
-                  </NavLink>
-                )}
-              </div>
-            )
-          })}
-        </nav>
+          <ThemePicker isMobile={isMobile} />
+        </div>
       </div>
     )
   }
 
   return (
     <div className="flex h-screen bg-surface-950 text-white overflow-hidden">
-      {/* Desktop sidebar */}
       <aside className={`hidden lg:flex flex-col bg-surface-900 border-r border-surface-800 shrink-0 transition-all duration-200 ${collapsed ? 'w-14' : 'w-64'}`}>
         <SidebarContent onNav={() => {}} />
       </aside>
-
-      {/* Mobile sidebar overlay */}
       {mobileSidebarOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="fixed inset-0 bg-black/60" onClick={() => setMobileSidebarOpen(false)} />
@@ -313,8 +306,6 @@ export default function Layout() {
           </aside>
         </div>
       )}
-
-      {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="flex items-center gap-3 px-4 py-3 bg-surface-900 border-b border-surface-800 shrink-0">
           <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden text-surface-400 hover:text-white"><MenuIcon size={22} /></button>
@@ -325,18 +316,25 @@ export default function Layout() {
               <Bell size={13} /> 재고부족 {alertCount}개
             </button>
           )}
-          <div className="relative">
-            <button onClick={() => setShowLangMenu(!showLangMenu)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-surface-800 hover:bg-surface-700 text-sm transition-colors">
-              <Globe size={13} className="text-surface-400" />
-              <span className="text-surface-300">{currentLang.flag} {currentLang.label}</span>
+          {/* 헤더 테마 버튼 */}
+          <div className="relative" data-theme-picker>
+            <button onClick={() => setShowThemePicker(p => !p)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-800 hover:bg-surface-700 text-surface-400 hover:text-white rounded-xl text-xs font-medium transition-colors"
+              title="테마 변경">
+              <Palette size={14} />
+              <span className="hidden sm:inline">{THEMES[theme]?.name || '테마'}</span>
             </button>
-            {showLangMenu && (
-              <div className="absolute right-0 top-10 bg-surface-800 border border-surface-700 rounded-xl overflow-hidden shadow-xl z-50 w-36">
-                {LANG_OPTIONS.map(lang => (
-                  <button key={lang.code} onClick={() => changeLanguage(lang.code)}
-                    className={'w-full flex items-center gap-2 px-4 py-2.5 text-sm hover:bg-surface-700 transition-colors ' + (i18n.language === lang.code ? 'text-primary-400' : 'text-surface-300')}>
-                    {lang.flag} {lang.label}
+            {showThemePicker && (
+              <div className="absolute right-0 top-full mt-1 w-52 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl z-50 p-1.5">
+                <p className="text-[10px] text-surface-500 px-2 py-1 font-medium uppercase tracking-wide">테마 선택</p>
+                {Object.entries(THEMES).map(([key, td]) => (
+                  <button key={key} onClick={() => { setTheme(key); setShowThemePicker(false) }}
+                    className={'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ' +
+                      (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-surface-800 hover:text-white')}>
+                    <div className="w-4 h-4 rounded-full border border-surface-600 shrink-0"
+                      style={{ background: td.primary }} />
+                    {td.name}
+                    {theme === key && <span className="ml-auto">✓</span>}
                   </button>
                 ))}
               </div>

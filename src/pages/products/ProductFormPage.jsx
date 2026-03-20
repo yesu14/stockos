@@ -327,7 +327,7 @@ export default function ProductFormPage() {
                   <tr key={idx} className="hover:bg-surface-800/30 transition-colors">
                     <td className="px-4 py-3 text-sm text-surface-200">{row.opt1Val}</td>
                     {form.option_count === 2 && <td className="px-4 py-3 text-sm text-surface-200">{row.opt2Val}</td>}
-                    <td className="px-4 py-3"><input type="number" min="0" value={row.stock} onChange={e => { const v=parseInt(e.target.value.replace(/[^0-9]/g,''))||0; setSkuRows(p=>p.map((r,i)=>i===idx?{...r,stock:v}:r)) }} className="w-24 mx-auto block bg-surface-800 border border-surface-700 rounded-lg px-3 py-1.5 text-sm text-white text-center focus:outline-none focus:border-primary-500" /></td>
+                    <td className="px-4 py-3"><input type="number" min="0" value={row.stock} onFocus={e => { if (e.target.value === '0') e.target.value = '' }} onChange={e => { const v=parseInt(e.target.value.replace(/[^0-9]/g,''))||0; setSkuRows(p=>p.map((r,i)=>i===idx?{...r,stock:v}:r)) }} className="w-24 mx-auto block bg-surface-800 border border-surface-700 rounded-lg px-3 py-1.5 text-sm text-white text-center focus:outline-none focus:border-primary-500" /></td>
                     <td className="px-4 py-3 text-center"><button onClick={() => setSkuRows(p=>p.filter((_,i)=>i!==idx))} className="p-1.5 rounded-lg hover:bg-red-500/10 text-surface-500 hover:text-red-400 transition-colors"><Trash2 size={14} /></button></td>
                   </tr>
                 ))}

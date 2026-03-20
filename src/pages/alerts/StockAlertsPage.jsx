@@ -34,16 +34,12 @@ function AlertsTab({ categories, products, skusByProduct, alertsBySkuId }) {
   }, [alertsBySkuId])
 
   function isLowSku(sku) {
-    // 5개 이하면 무조건 부족
-    if (sku.stock <= 5) return true
-    // 알림 설정된 경우 threshold 이하면 부족
     const a = alertsBySkuId[sku.id]
     if (a && a.is_active && sku.stock <= a.threshold) return true
     return false
   }
 
   function getAlertReason(sku) {
-    if (sku.stock <= 5) return `재고 ${sku.stock}개 (5개 이하 긴급)`
     const a = alertsBySkuId[sku.id]
     if (a && a.is_active) return `재고 ${sku.stock}개 / 기준 ${a.threshold}개`
     return `재고 ${sku.stock}개`
@@ -67,7 +63,7 @@ function AlertsTab({ categories, products, skusByProduct, alertsBySkuId }) {
       <div className="flex flex-col items-center justify-center py-20 bg-surface-900 border border-surface-800 rounded-2xl">
         <CheckCircle size={48} className="text-emerald-400 mb-3 opacity-60" />
         <p className="text-white font-semibold">모든 재고가 정상입니다</p>
-        <p className="text-surface-500 text-sm mt-1">모든 재고가 5개 초과이며 알림 기준 이상입니다</p>
+        <p className="text-surface-500 text-sm mt-1">모든 재고가 알림 기준 이상입니다</p>
       </div>
     )
   }
@@ -94,7 +90,7 @@ function AlertsTab({ categories, products, skusByProduct, alertsBySkuId }) {
               <AlertTriangle size={12} className="text-red-400 shrink-0" />
               <span className="flex-1 text-sm text-surface-200">{label}</span>
               <span className="text-red-400 font-mono font-bold text-base">{sku.stock}</span>
-              <span className="text-xs text-surface-500">{sku.stock <= 5 ? '(5개 이하 긴급)' : `/ 기준 ${a?.threshold}`}</span>
+              <span className="text-xs text-surface-500">{a?.threshold !== undefined ? `/ 기준 ${a.threshold}` : ''}</span>
             </div>
           )
         })}
@@ -281,6 +277,22 @@ function SettingsTab({ categories, products, skusByProduct, alertsBySkuId, onAle
 
   return (
     <div className="space-y-4">
+      {/* 미설정 현황 */}
+      {(() => {
+        const allSkus = Object.values(skusByProduct).flat()
+        const unsetCount = allSkus.filter(s => !localAlerts[s.id]?.id).length
+        const totalCount = allSkus.length
+        return (
+          <div className="flex items-center gap-3 px-4 py-2.5 bg-surface-800/40 border border-surface-700/60 rounded-xl text-sm flex-wrap">
+            <span className="text-surface-300">전체 옵션: <span className="text-white font-bold">{totalCount}개</span></span>
+            <span className="text-surface-600">|</span>
+            <span className="text-surface-300">알림 설정: <span className="text-emerald-400 font-bold">{totalCount - unsetCount}개</span></span>
+            <span className="text-surface-600">|</span>
+            <span className="text-surface-300">미설정: <span className={unsetCount > 0 ? 'text-yellow-400 font-bold' : 'text-surface-500'}>{unsetCount}개</span></span>
+          </div>
+        )
+      })()}
+
       {/* 일괄 적용 */}
       <div className="flex items-center gap-3 p-4 bg-surface-900 border border-surface-800 rounded-2xl flex-wrap">
         <span className="text-sm font-semibold text-white">일괄 적용</span>
@@ -385,15 +397,10 @@ export default function StockAlertsPage() {
 
   const lowCount = useMemo(() => {
     const allSkus = Object.values(skusByProduct).flat()
-    let n = 0
-    allSkus.forEach(sku => {
-      // 5개 이하 무조건
-      if (sku.stock <= 5) { n++; return }
-      // 알림 설정된 경우 threshold 이하
+    return allSkus.filter(sku => {
       const a = alertsBySkuId[sku.id]
-      if (a && a.is_active && sku.stock <= a.threshold) n++
-    })
-    return n
+      return a && a.is_active && sku.stock <= a.threshold
+    }).length
   }, [alertsBySkuId, skusByProduct])
 
   return (

@@ -1,7 +1,15 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
-import { PackageCheck, Package, Search, ChevronDown, ChevronRight, X, Trash2, Plus, Save, Pencil, Truck, Download } from 'lucide-react'
+import {
+  PackageCheck, Package, Search, ChevronDown, ChevronRight,
+  X, Trash2, Plus, Save, Pencil, Truck, Download, RefreshCw
+} from 'lucide-react'
+import {
+  LineChart, Line, BarChart, Bar, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Legend
+} from 'recharts'
 import ExcelJS from 'exceljs'
 import toast from 'react-hot-toast'
 
@@ -9,14 +17,45 @@ function skuLabel(sku) {
   return [sku?.o1?.option_value, sku?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
 }
 
-// ── 체크박스 (indeterminate) ──────────────────────────────
+function fmt(n) { return Number(n || 0).toLocaleString() }
+
+// ── 체크박스 ──────────────────────────────────────────────
 function Chk({ state, onChange, className = '' }) {
   const ref = (el) => { if (el) el.indeterminate = state === 'partial' }
   return <input type="checkbox" ref={ref} checked={state === true || state === 'partial'} onChange={onChange}
     className={'w-4 h-4 accent-primary-500 cursor-pointer shrink-0 ' + className} />
 }
 
-// ── 엑셀 그리드 (상세보기 모달) ──────────────────────────
+// ── 일괄 수량 설정 바 ────────────────────────────────────
+function BulkQtyBar({ items, onUpdateQty }) {
+  const [bulkQty, setBulkQty] = useState('')
+  function applyBulk() {
+    const qty = parseInt(bulkQty)
+    if (!qty || qty <= 0) return toast.error('수량을 1 이상 입력하세요')
+    items.forEach(it => onUpdateQty(it.sku.id, qty))
+    toast.success(`전체 ${items.length}개 항목에 ${qty} 적용됨`)
+    setBulkQty('')
+  }
+  return (
+    <div className="flex items-center gap-2 p-2.5 bg-primary-500/8 border border-primary-500/20 rounded-xl flex-wrap">
+      <span className="text-xs text-primary-400 shrink-0 font-semibold">📦 일괄 수량 설정</span>
+      <input
+        type="number" min="1" value={bulkQty}
+        onChange={e => setBulkQty(e.target.value.replace(/[^0-9]/g, ''))}
+        onKeyDown={e => e.key === 'Enter' && applyBulk()}
+        placeholder="수량 입력"
+        className="w-28 bg-surface-700 border border-primary-500/40 rounded-lg px-3 py-1.5 text-sm text-white text-center focus:outline-none focus:border-primary-500"
+      />
+      <button onClick={applyBulk}
+        className="px-3 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg text-xs font-semibold transition-colors">
+        전체 적용
+      </button>
+      <span className="text-xs text-surface-500 ml-auto">{items.length}개 항목</span>
+    </div>
+  )
+}
+
+// ── StockGrid 모달 ────────────────────────────────────────
 function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkApply }) {
   const opt1Vals = useMemo(() => {
     const seen = new Map()
@@ -29,18 +68,15 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
     return [...seen.values()].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
   }, [skus])
   const hasOpt2 = opt2Vals.length > 0
-
   function getSku(o1val, o2val) {
     if (o1val === 'Default') return skus[0]
     return skus.find(s => s.o1?.option_value === o1val && (o2val ? s.o2?.option_value === o2val : !s.o2))
   }
-
   return (
     <div className="flex flex-col h-full gap-3">
       <div className="flex items-center gap-3 p-3 bg-surface-800/60 rounded-xl flex-wrap shrink-0">
-        <span className="text-xs text-surface-400 shrink-0">일괄 적용 (선택):</span>
-        <input type="number" min="0" value={bulkValue} onChange={e => onBulkChange(e.target.value.replace(/[^0-9]/g, ''))}
-          placeholder="수량"
+        <span className="text-xs text-surface-400 shrink-0">일괄 적용:</span>
+        <input type="number" min="0" value={bulkValue} onChange={e => onBulkChange(e.target.value.replace(/[^0-9]/g, ''))} placeholder="수량"
           className="w-28 bg-surface-700 border border-surface-600 rounded-lg px-3 py-1.5 text-sm text-white text-center focus:outline-none focus:border-primary-500" />
         <button onClick={onBulkApply} className="px-4 py-1.5 bg-primary-500 hover:bg-primary-600 text-white rounded-lg text-sm font-medium transition-colors">전체 적용</button>
       </div>
@@ -158,6 +194,7 @@ function InboundItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, prod
 
   return (
     <div className="space-y-2">
+      <BulkQtyBar items={items} onUpdateQty={onUpdateQty} />
       <div className="flex items-center gap-2 flex-wrap">
         <Chk state={allChecked ? true : selectedIds.length > 0 ? 'partial' : false}
           onChange={() => { const next = {}; if (!allChecked) items.forEach(it => { next[it.sku.id] = true }); setChecked(next) }} />
@@ -172,7 +209,7 @@ function InboundItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, prod
         <div className="flex items-center gap-2 px-3 py-2 bg-surface-800/50 border-b border-surface-800 text-xs text-surface-400 font-semibold">
           <div className="w-4" /><span className="flex-1">카테고리 / 상품 / 옵션</span>
           <span className="w-14 text-center">현재재고</span>
-          <span className="w-24 text-center text-primary-400">입고수량</span>
+          <span className="w-24 text-center text-primary-400">입고수량 <span className="text-red-400">*</span></span>
           <span className="w-14 text-center text-emerald-400">입고후</span>
           <span className="w-6" />
         </div>
@@ -212,13 +249,19 @@ function InboundItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, prod
                     {prodOpen && prodItems.map(item => {
                       const qty = item.addQty
                       const afterStock = item.currentStock + qty
+                      const isZero = !qty || qty <= 0
                       return (
                         <div key={item.sku.id} className="flex items-center gap-2 pl-12 pr-3 py-2 border-t border-surface-800/20 hover:bg-surface-800/5">
                           <Chk state={!!checked[item.sku.id]} onChange={() => setChecked(p => ({ ...p, [item.sku.id]: !p[item.sku.id] }))} />
                           <span className="flex-1 text-xs text-surface-300">{skuLabel(item.sku)}</span>
                           <span className="w-14 text-center text-xs font-mono text-surface-400">{item.currentStock}</span>
-                          <input type="number" min="0" value={qty} onChange={e => onUpdateQty(item.sku.id, parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0)}
-                            className="w-24 text-center bg-surface-800 border border-primary-500/40 rounded-lg px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-primary-500" />
+                          <div className="w-24 relative">
+                            <input type="number" min="0" value={qty}
+                              onFocus={e => { if (e.target.value === '0') e.target.value = '' }}
+                              onChange={e => onUpdateQty(item.sku.id, parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0)}
+                              className={'w-full text-center bg-surface-800 border rounded-lg px-2 py-1 text-xs text-white font-mono focus:outline-none ' + (isZero ? 'border-red-500/50 bg-red-500/5' : 'border-primary-500/40 focus:border-primary-500')} />
+                            {isZero && <span className="absolute -top-3.5 left-0 text-[9px] text-red-400 whitespace-nowrap">필수</span>}
+                          </div>
                           <span className={'w-14 text-center text-xs font-mono font-bold text-emerald-400'}>{afterStock}</span>
                           <button onClick={() => { onDeleteItems([item.sku.id]); setChecked(p => { const n = { ...p }; delete n[item.sku.id]; return n }) }}
                             className="w-6 flex items-center justify-center text-surface-600 hover:text-red-400 transition-colors">
@@ -238,7 +281,7 @@ function InboundItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, prod
   )
 }
 
-// ── 상품 선택 트리 (신규/추가) ────────────────────────────
+// ── 상품 선택 트리 ────────────────────────────────────────
 function ProductTreeSelector({ categories, products, skusByProduct, existingSkuIds = new Set(), onAddItems }) {
   const [expCats, setExpCats] = useState({})
   const [expProds, setExpProds] = useState({})
@@ -263,14 +306,12 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
 
   function available(prod) { return (skusByProduct[prod.id] || []).filter(s => !existingSkuIds.has(s.id)) }
   function prodState(prod) {
-    const skus = available(prod)
-    if (!skus.length) return false
+    const skus = available(prod); if (!skus.length) return false
     const n = skus.filter(s => checked[s.id]).length
     return n === 0 ? false : n === skus.length ? true : 'partial'
   }
   function catState(prods) {
-    const skus = prods.flatMap(available)
-    if (!skus.length) return false
+    const skus = prods.flatMap(available); if (!skus.length) return false
     const n = skus.filter(s => checked[s.id]).length
     return n === 0 ? false : n === skus.length ? true : 'partial'
   }
@@ -279,16 +320,13 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
     setChecked(p => ({ ...p, [skuId]: !p[skuId] }))
   }
   function toggleProd(prod) {
-    const skus = available(prod)
-    const allOn = skus.every(s => checked[s.id])
+    const skus = available(prod); const allOn = skus.every(s => checked[s.id])
     const next = { ...checked }; skus.forEach(s => { next[s.id] = !allOn }); setChecked(next)
   }
   function toggleCat(prods) {
-    const skus = prods.flatMap(available)
-    const allOn = skus.every(s => checked[s.id])
+    const skus = prods.flatMap(available); const allOn = skus.every(s => checked[s.id])
     const next = { ...checked }; skus.forEach(s => { next[s.id] = !allOn }); setChecked(next)
   }
-
   function addChecked() {
     const ids = Object.keys(checked).filter(id => checked[id])
     if (!ids.length) return toast.error('체크박스로 옵션을 선택하세요')
@@ -301,9 +339,7 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
     onAddItems(items); setChecked({})
     toast.success(`${items.length}개 추가됨 (수량은 입고 목록에서 입력)`)
   }
-
   function openGrid(prod) { setActiveGrid({ product: prod, skus: skusByProduct[prod.id] || [], hasOpt2: (skusByProduct[prod.id] || []).some(s => s.o2) }); setGridValues({}); setBulkVal('') }
-
   function handleGridAdd() {
     const items = (activeGrid?.skus || []).filter(s => {
       if (existingSkuIds.has(s.id)) { toast.error(`'${skuLabel(s)}'는 이미 입고 목록에 있습니다`); return false }
@@ -414,25 +450,30 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
 
 // ── 입고 정보 폼 ──────────────────────────────────────────
 function InboundInfoForm({ values, onChange }) {
+  const fields = [
+    { key: 'inboundDate', label: '입고일자', type: 'date', required: true },
+    { key: 'boxCount', label: '박스 수량', type: 'number' },
+    { key: 'truckType', label: '트럭 정보', placeholder: '예: 5톤' },
+    { key: 'blNumber', label: 'BL번호', placeholder: 'BL 번호' },
+    { key: 'customsCost', label: '통관비용', type: 'number', placeholder: '0', required: true },
+    { key: 'goodsAmount', label: '상품총액', type: 'number', placeholder: '상품 수입 총가격', required: true },
+    { key: 'note', label: '메모', type: 'textarea', placeholder: '메모', span: 2 },
+  ]
   return (
     <div className="grid grid-cols-2 gap-3">
-      {[
-        { key: 'orderName', label: '입고명', placeholder: '예: 물총, 오너먼트', span: 2, required: true },
-        { key: 'inboundDate', label: '입고일자', type: 'date' },
-        { key: 'boxCount', label: '박스 수량', type: 'number' },
-        { key: 'truckType', label: '트럭 정보', placeholder: '예: 5톤' },
-        { key: 'blNumber', label: 'BL번호', placeholder: 'BL 번호' },
-        { key: 'taxPaid', label: '세금/금액', type: 'number', span: 2 },
-        { key: 'note', label: '메모', type: 'textarea', placeholder: '메모', span: 2 },
-      ].map(({ key, label, type, placeholder, span, required }) => (
+      {fields.map(({ key, label, type, placeholder, span, required }) => (
         <div key={key} className={span === 2 ? 'col-span-2' : ''}>
-          <label className="text-xs text-surface-500 mb-1 block">{label}{required && <span className="text-red-400 ml-0.5">*</span>}</label>
+          <label className="text-xs text-surface-500 mb-1 block">
+            {label}{required && <span className="text-red-400 ml-0.5">*</span>}
+          </label>
           {type === 'textarea' ? (
-            <textarea value={values[key]} onChange={e => onChange(key, e.target.value)} rows={2} placeholder={placeholder}
+            <textarea value={values[key] ?? ''} onChange={e => onChange(key, e.target.value)} rows={2} placeholder={placeholder}
               className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder-surface-500 focus:outline-none focus:border-primary-500 resize-none" />
           ) : (
-            <input type={type || 'text'} min="0" value={values[key]} onChange={e => onChange(key, type === 'number' ? e.target.value.replace(/[^0-9]/g, '') : e.target.value)} placeholder={placeholder}
-              className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder-surface-500 focus:outline-none focus:border-primary-500" />
+            <input type={type || 'text'} min="0" value={values[key] ?? ''}
+              onChange={e => onChange(key, type === 'number' ? e.target.value.replace(/[^0-9]/g, '') : e.target.value)}
+              placeholder={placeholder}
+              className={'w-full bg-surface-800 border rounded-lg px-3 py-2 text-sm text-white placeholder-surface-500 focus:outline-none ' + (required && !values[key] ? 'border-red-500/40 focus:border-red-500' : 'border-surface-700 focus:border-primary-500')} />
           )}
         </div>
       ))}
@@ -444,37 +485,51 @@ function InboundInfoForm({ values, onChange }) {
 function NewInbound({ categories, products, skusByProduct, onDone }) {
   const { user } = useAuth()
   const [items, setItems] = useState([])
-  const [info, setInfo] = useState({ orderName: '', inboundDate: new Date().toISOString().slice(0, 10), boxCount: '', truckType: '', blNumber: '', taxPaid: '', note: '' })
+  const [info, setInfo] = useState({
+    inboundDate: new Date().toISOString().slice(0, 10),
+    boxCount: '', truckType: '', blNumber: '',
+    customsCost: '', goodsAmount: '', note: ''
+  })
   const [saving, setSaving] = useState(false)
   const categoryMap = Object.fromEntries(categories.map(c => [c.id, c.name]))
   const productMap = Object.fromEntries(products.map(p => [p.id, p.name]))
   const existingSkuIds = useMemo(() => new Set(items.map(it => it.sku.id)), [items])
 
   function addItems(newItems) {
-    setItems(prev => { const next = [...prev]; newItems.forEach(ni => { const i = next.findIndex(it => it.sku.id === ni.sku.id); if (i >= 0) next[i] = ni; else next.push(ni) }); return next })
+    setItems(prev => {
+      const next = [...prev]
+      newItems.forEach(ni => { const i = next.findIndex(it => it.sku.id === ni.sku.id); if (i >= 0) next[i] = ni; else next.push(ni) })
+      return next
+    })
   }
   function updateQty(skuId, qty) { setItems(p => p.map(it => it.sku.id === skuId ? { ...it, addQty: qty, finalStock: it.currentStock + qty } : it)) }
   function deleteItems(skuIds) { const s = new Set(skuIds); setItems(p => p.filter(it => !s.has(it.sku.id))) }
 
   async function confirmInbound() {
-    if (!info.orderName?.trim()) return toast.error('입고명을 입력하세요 (필수)')
     if (!items.length) return toast.error('입고할 상품을 추가하세요')
+    const zeroItems = items.filter(it => !it.addQty || it.addQty <= 0)
+    if (zeroItems.length > 0) {
+      const names = zeroItems.slice(0, 3).map(it => `${it.product?.name} / ${skuLabel(it.sku)}`).join(', ')
+      return toast.error(`입고수량 0 항목: ${names}`)
+    }
+    if (!info.customsCost) return toast.error('통관비용을 입력하세요 (필수)')
+    if (!info.goodsAmount) return toast.error('상품총액을 입력하세요 (필수)')
     setSaving(true)
     try {
       const orderNumber = 'IN-' + Date.now().toString(36).toUpperCase()
       const totalQty = items.reduce((s, it) => s + it.addQty, 0)
       const { data: order, error: oErr } = await supabase.from('inbound_orders').insert({
         order_number: orderNumber, order_type: 'inbound',
-        order_name: info.orderName?.trim() || null,
-        inbound_date: info.inboundDate, box_count: info.boxCount ? parseInt(info.boxCount) : null,
-        truck_type: info.truckType || null, bl_number: info.blNumber || null,
-        tax_paid: info.taxPaid ? parseInt(info.taxPaid) : null,
+        inbound_date: info.inboundDate,
+        box_count: info.boxCount ? parseInt(info.boxCount) : null,
+        truck_type: info.truckType || null,
+        bl_number: info.blNumber?.trim() || null,
+        tax_paid: info.customsCost ? parseInt(info.customsCost) : null,
+        goods_amount: info.goodsAmount ? parseInt(info.goodsAmount) : null,
         note: info.note || null, created_by: user.id
       }).select().single()
       if (oErr) throw oErr
-      if (totalQty > 0) {
-        await supabase.from('inbound_orders').update({ total_quantity: totalQty }).eq('id', order.id)
-      }
+      await supabase.from('inbound_orders').update({ total_quantity: totalQty }).eq('id', order.id)
       for (const item of items) {
         await supabase.from('inbound_items').insert({ inbound_order_id: order.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: item.finalStock })
         await supabase.from('product_skus').update({ stock: item.finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
@@ -515,7 +570,11 @@ function NewInbound({ categories, products, skusByProduct, onDone }) {
 function EditInbound({ categories, products, skusByProduct }) {
   const { user } = useAuth()
   const [orders, setOrders] = useState([])
+  const [loading, setLoading] = useState(true)
   const [searchQ, setSearchQ] = useState('')
+  const [expandedMonths, setExpandedMonths] = useState({})
+  const [expandedDates, setExpandedDates] = useState({})
+  const [expandedProds, setExpandedProds] = useState({})
   const [checkedOrders, setCheckedOrders] = useState({})
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [orderItems, setOrderItems] = useState([])
@@ -523,19 +582,35 @@ function EditInbound({ categories, products, skusByProduct }) {
   const [saving, setSaving] = useState(false)
   const [info, setInfo] = useState({})
   const [addingProduct, setAddingProduct] = useState(false)
+  const [deleting, setDeleting] = useState(new Set())
+
   const categoryMap = Object.fromEntries(categories.map(c => [c.id, c.name]))
   const productMap = Object.fromEntries(products.map(p => [p.id, p.name]))
 
   useEffect(() => { loadOrders() }, [])
 
   async function loadOrders() {
-    const { data } = await supabase.from('inbound_orders').select('*').eq('order_type', 'inbound').order('created_at', { ascending: false }).limit(200)
+    setLoading(true)
+    const { data } = await supabase.from('inbound_orders')
+      .select('id, order_number, inbound_date, total_quantity, truck_type, box_count, tax_paid, goods_amount, bl_number, note, created_at, inbound_items(quantity, product_sku_id, product_skus(products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
+      .eq('order_type', 'inbound')
+      .order('inbound_date', { ascending: false }).order('created_at', { ascending: false })
+      .limit(300)
     setOrders(data || [])
+    setLoading(false)
   }
 
   async function selectOrder(order) {
     setSelectedOrder(order); setLoadingItems(true); setAddingProduct(false)
-    setInfo({ orderName: order.order_name || '', inboundDate: order.inbound_date || '', boxCount: order.box_count || '', truckType: order.truck_type || '', blNumber: order.bl_number || '', taxPaid: order.tax_paid || '', note: order.note || '' })
+    setInfo({
+      inboundDate: order.inbound_date || '',
+      boxCount: order.box_count || '',
+      truckType: order.truck_type || '',
+      blNumber: order.bl_number || '',
+      customsCost: order.tax_paid || '',
+      goodsAmount: order.goods_amount || '',
+      note: order.note || ''
+    })
     const { data } = await supabase.from('inbound_items')
       .select('id, quantity, final_stock, product_sku_id, product_skus(stock, products(id, name, category_id), o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
       .eq('inbound_order_id', order.id)
@@ -551,8 +626,6 @@ function EditInbound({ categories, products, skusByProduct }) {
   const existingSkuIds = useMemo(() => new Set(orderItems.map(it => it.sku.id)), [orderItems])
 
   function addItems(newItems) {
-    const dups = newItems.filter(ni => existingSkuIds.has(ni.sku.id))
-    dups.forEach(ni => toast.error(`'${ni.product?.name} - ${skuLabel(ni.sku)}'는 이미 입고 목록에 있습니다`))
     const toAdd = newItems.filter(ni => !existingSkuIds.has(ni.sku.id))
     if (toAdd.length) setOrderItems(p => [...p, ...toAdd])
   }
@@ -561,107 +634,257 @@ function EditInbound({ categories, products, skusByProduct }) {
 
   async function saveOrder() {
     if (!selectedOrder) return
+    const zeroItems = orderItems.filter(it => !it.addQty || it.addQty <= 0)
+    if (zeroItems.length > 0) {
+      const names = zeroItems.slice(0, 3).map(it => `${it.product?.name} / ${skuLabel(it.sku)}`).join(', ')
+      return toast.error(`입고수량 0 항목: ${names}`)
+    }
+    if (!info.customsCost) return toast.error('통관비용을 입력하세요 (필수)')
+    if (!info.goodsAmount) return toast.error('상품총액을 입력하세요 (필수)')
     setSaving(true)
     try {
       const totalQty = orderItems.reduce((s, it) => s + it.addQty, 0)
-      await supabase.from('inbound_orders').update({ order_name: info.orderName?.trim() || null, inbound_date: info.inboundDate, box_count: info.boxCount ? parseInt(info.boxCount) : null, truck_type: info.truckType || null, bl_number: info.blNumber || null, tax_paid: info.taxPaid ? parseInt(info.taxPaid) : null, note: info.note || null }).eq('id', selectedOrder.id)
-      await supabase.from('inbound_orders').update({ total_quantity: totalQty }).eq('id', selectedOrder.id)
+      const { data: origItems } = await supabase.from('inbound_items').select('product_sku_id, quantity').eq('inbound_order_id', selectedOrder.id)
+      const origMap = {}
+      ;(origItems || []).forEach(it => { origMap[it.product_sku_id] = it.quantity })
+      await supabase.from('inbound_orders').update({
+        inbound_date: info.inboundDate,
+        box_count: info.boxCount ? parseInt(info.boxCount) : null,
+        truck_type: info.truckType || null,
+        bl_number: info.blNumber?.trim() || null,
+        tax_paid: info.customsCost ? parseInt(info.customsCost) : null,
+        goods_amount: info.goodsAmount ? parseInt(info.goodsAmount) : null,
+        note: info.note || null, total_quantity: totalQty
+      }).eq('id', selectedOrder.id)
       await supabase.from('inbound_items').delete().eq('inbound_order_id', selectedOrder.id)
       for (const item of orderItems) {
-        await supabase.from('inbound_items').insert({ inbound_order_id: selectedOrder.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: item.finalStock })
-        await supabase.from('product_skus').update({ stock: item.finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
+        const { data: freshSku } = await supabase.from('product_skus').select('stock').eq('id', item.sku.id).single()
+        const currentDbStock = freshSku?.stock || 0
+        const origQty = origMap[item.sku.id] || 0
+        const finalStock = Math.max(0, currentDbStock - origQty + item.addQty)
+        await supabase.from('inbound_items').insert({ inbound_order_id: selectedOrder.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: finalStock })
+        await supabase.from('product_skus').update({ stock: finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
+        await supabase.from('stock_logs').insert({ product_sku_id: item.sku.id, change_type: 'inbound', quantity_before: currentDbStock, quantity_change: item.addQty - origQty, quantity_after: finalStock, option_label: skuLabel(item.sku), user_name: user?.email || '', created_by: user.id, note: '입고수정 ' + selectedOrder.order_number })
       }
       toast.success('수정 완료'); loadOrders(); setAddingProduct(false)
     } catch (err) { toast.error(err.message) }
     finally { setSaving(false) }
   }
 
-  const filteredOrders = useMemo(() => {
+  async function deleteOrder(id) {
+    if (!confirm('입고를 삭제하시겠습니까?')) return
+    setDeleting(p => new Set([...p, id]))
+    try {
+      await supabase.from('inbound_items').delete().eq('inbound_order_id', id)
+      await supabase.from('inbound_orders').delete().eq('id', id)
+      if (selectedOrder?.id === id) { setSelectedOrder(null); setOrderItems([]) }
+      toast.success('삭제 완료'); loadOrders()
+    } catch (err) { toast.error(err.message) }
+    finally { setDeleting(p => { const n = new Set(p); n.delete(id); return n }) }
+  }
+
+  async function deleteMultiple(ids) {
+    if (!ids.length || !confirm(`${ids.length}개 입고를 삭제하시겠습니까?`)) return
+    for (const id of ids) {
+      await supabase.from('inbound_items').delete().eq('inbound_order_id', id)
+      await supabase.from('inbound_orders').delete().eq('id', id)
+      if (selectedOrder?.id === id) { setSelectedOrder(null); setOrderItems([]) }
+    }
+    toast.success(`${ids.length}개 삭제 완료`); setCheckedOrders({}); loadOrders()
+  }
+
+  const filtered = useMemo(() => {
     if (!searchQ.trim()) return orders
-    return orders.filter(o => (o.order_name || o.order_number || '').toLowerCase().includes(searchQ.toLowerCase()))
+    const q = searchQ.toLowerCase()
+    return orders.filter(o => (o.order_number || '').toLowerCase().includes(q))
   }, [orders, searchQ])
 
+  const tree = useMemo(() => {
+    const months = {}
+    filtered.forEach(order => {
+      const date = order.inbound_date || order.created_at?.slice(0, 10) || ''
+      const month = date.slice(0, 7)
+      if (!months[month]) months[month] = {}
+      months[month][date] = order
+    })
+    return Object.entries(months).sort((a, b) => b[0].localeCompare(a[0]))
+  }, [filtered])
+
+  const checkedIds = Object.keys(checkedOrders).filter(id => checkedOrders[id])
+  function chkState(ids) {
+    const n = ids.filter(id => checkedOrders[id]).length
+    return n === 0 ? false : n === ids.length ? true : 'partial'
+  }
+  function toggleAll(ids) {
+    const allOn = ids.every(id => checkedOrders[id])
+    setCheckedOrders(p => { const n = { ...p }; ids.forEach(id => { n[id] = !allOn }); return n })
+  }
+
   return (
-    <div className="grid lg:grid-cols-5 gap-5">
-      <div className="lg:col-span-2 space-y-3">
-        <div className="space-y-2">
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500" />
-          <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="입고명 또는 번호 검색..."
-            className="w-full bg-surface-800 border border-surface-700 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-surface-500 focus:outline-none focus:border-primary-500" />
+    <div className="grid lg:grid-cols-[380px_1fr] gap-5">
+      <div className="space-y-3">
+        <div className="flex gap-2 flex-wrap">
+          <div className="relative flex-1">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500" />
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="번호 검색..."
+              className="w-full bg-surface-800 border border-surface-700 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder-surface-500 focus:outline-none focus:border-primary-500" />
+          </div>
+          {checkedIds.length > 0 && (
+            <button onClick={() => deleteMultiple(checkedIds)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-red-500/15 hover:bg-red-500/25 text-red-400 rounded-xl text-xs font-medium transition-colors whitespace-nowrap">
+              <Trash2 size={12} /> {checkedIds.length}개 삭제
+            </button>
+          )}
         </div>
-        {Object.values(checkedOrders).some(Boolean) && (
-          <button onClick={async () => {
-            const ids = Object.keys(checkedOrders).filter(id => checkedOrders[id])
-            if (!confirm(`선택한 ${ids.length}개 입고를 삭제하시겠습니까?`)) return
-            for (const id of ids) {
-              await supabase.from('inbound_items').delete().eq('inbound_order_id', id)
-              await supabase.from('inbound_orders').delete().eq('id', id)
-            }
-            toast.success(`${ids.length}개 삭제됨`)
-            setCheckedOrders({})
-            if (ids.includes(selectedOrder?.id)) setSelectedOrder(null)
-            loadOrders()
-          }} className="w-full flex items-center justify-center gap-2 py-2 bg-red-500/15 hover:bg-red-500/25 text-red-400 rounded-xl text-sm font-medium transition-colors">
-            <Trash2 size={13} /> 선택 삭제 ({Object.values(checkedOrders).filter(Boolean).length}개)
-          </button>
-        )}
-        </div>
-        <div className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden max-h-[70vh] overflow-y-auto">
-          {filteredOrders.length === 0 ? <p className="text-center py-8 text-surface-500 text-sm">입고 이력 없음</p>
-            : filteredOrders.map(o => (
-              <div key={o.id} className={'flex items-start gap-2 border-b border-surface-800 hover:bg-surface-800/20 transition-colors pr-2 ' + (selectedOrder?.id === o.id ? 'bg-primary-500/8 border-l-2 border-l-primary-500' : '')}>
-                <input type="checkbox" checked={!!checkedOrders[o.id]} onChange={e => { e.stopPropagation(); setCheckedOrders(p => ({ ...p, [o.id]: !p[o.id] })) }}
-                  className="w-4 h-4 accent-red-500 cursor-pointer mt-3.5 ml-2 shrink-0" />
-                <button onClick={() => selectOrder(o)} className="flex-1 text-left px-2 py-3">
-                  <p className="font-semibold text-white text-sm">{o.order_name || o.order_number}</p>
-                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                    <span className="text-xs text-surface-500">{o.inbound_date || o.created_at?.slice(0, 10)}</span>
-                    {o.truck_type && <span className="text-xs text-surface-600">{o.truck_type}</span>}
-                    {o.tax_paid > 0 && <span className="text-xs text-surface-600">₩{Number(o.tax_paid).toLocaleString()}</span>}
-                    {o.total_quantity > 0 && <span className="text-xs bg-primary-500/15 text-primary-400 px-1.5 py-0.5 rounded">{o.total_quantity}개</span>}
-                  </div>
-                </button>
-              </div>
-            ))
-          }
-        </div>
-      </div>
-      <div className="lg:col-span-3 space-y-4">
-        {!selectedOrder ? (
-          <div className="flex flex-col items-center justify-center py-20 text-surface-500"><PackageCheck size={32} className="mb-2 opacity-30" /><p className="text-sm">왼쪽에서 입고 이력을 선택하세요</p></div>
+        {loading ? (
+          <div className="flex justify-center py-8"><div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
-          <>
-            <div className="bg-surface-900 border border-surface-800 rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="font-semibold text-white text-sm">{selectedOrder.order_number} - 입고 목록</h2>
-                <button onClick={() => setAddingProduct(!addingProduct)} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-500/15 hover:bg-primary-500/25 text-primary-400 rounded-lg text-xs font-medium">
-                  <Plus size={12} /> 상품 추가
-                </button>
-              </div>
-              {loadingItems ? <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
-                : <InboundItemsTree items={orderItems} onUpdateQty={updateQty} onDeleteItems={deleteItems} categoryMap={categoryMap} productMap={productMap} />
-              }
-            </div>
-            {addingProduct && (
-              <div className="bg-surface-900 border border-primary-500/30 rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm font-semibold text-primary-400">상품 추가</p>
-                  <button onClick={() => setAddingProduct(false)} className="text-surface-400 hover:text-white"><X size={15} /></button>
-                </div>
-                <ProductTreeSelector categories={categories} products={products} skusByProduct={skusByProduct} existingSkuIds={existingSkuIds} onAddItems={addItems} />
-              </div>
+          <div className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden max-h-[70vh] overflow-y-auto">
+            {tree.length === 0 ? (
+              <p className="text-center py-8 text-surface-500 text-sm">입고 이력 없음</p>
+            ) : (
+              <table className="w-full text-sm">
+                <tbody>
+                  {tree.map(([month, dates]) => {
+                    const [y, m] = month.split('-')
+                    const monthOpen = expandedMonths[month] ?? false
+                    const monthOrderIds = Object.values(dates).map(o => o.id)
+                    const monthQty = Object.values(dates).reduce((s, o) => s + (o.total_quantity || 0), 0)
+                    return [
+                      <tr key={`m-${month}`} className="bg-surface-800/60 border-b border-surface-700/40 hover:bg-surface-800 transition-colors cursor-pointer">
+                        <td className="px-2 py-2.5 w-8" onClick={e => e.stopPropagation()}>
+                          <Chk state={chkState(monthOrderIds)} onChange={() => toggleAll(monthOrderIds)} />
+                        </td>
+                        <td className="px-2 py-2.5" onClick={() => setExpandedMonths(p => ({ ...p, [month]: !monthOpen }))}>
+                          <div className="flex items-center gap-2">
+                            {monthOpen ? <ChevronDown size={13} className="text-surface-500" /> : <ChevronRight size={13} className="text-surface-500" />}
+                            <span className="text-sm font-bold text-surface-200">{y}년 {parseInt(m)}월</span>
+                            <span className="text-xs text-surface-600">({Object.keys(dates).length}건)</span>
+                            <span className="text-xs font-mono text-primary-400 ml-auto">{monthQty}개</span>
+                          </div>
+                        </td>
+                        <td className="w-16" />
+                      </tr>,
+                      ...(!monthOpen ? [] : Object.entries(dates).sort((a, b) => b[0].localeCompare(a[0])).flatMap(([date, order]) => {
+                        const dateOpen = expandedDates[date] ?? false
+                        const [,, dd] = date.split('-')
+                        const items = order.inbound_items || []
+                        const prodMap = {}
+                        items.forEach(it => {
+                          const pn = it.product_skus?.products?.name || '상품'
+                          if (!prodMap[pn]) prodMap[pn] = []
+                          prodMap[pn].push(it)
+                        })
+                        return [
+                          <tr key={`d-${date}`} className={"border-b border-surface-800/30 hover:bg-surface-800/20 transition-colors cursor-pointer " + (selectedOrder?.id === order.id ? 'bg-primary-500/8 border-l-2 border-l-primary-500' : '')}>
+                            <td className="px-2 py-2.5 w-8" onClick={e => e.stopPropagation()}>
+                              <Chk state={!!checkedOrders[order.id]} onChange={() => setCheckedOrders(p => ({ ...p, [order.id]: !p[order.id] }))} />
+                            </td>
+                            <td className="px-2 py-2.5 pl-6" onClick={() => setExpandedDates(p => ({ ...p, [date]: !dateOpen }))}>
+                              <div className="flex items-center gap-2">
+                                {dateOpen ? <ChevronDown size={12} className="text-surface-500" /> : <ChevronRight size={12} className="text-surface-500" />}
+                                <span className="text-sm font-semibold text-white">{parseInt(m)}월 {parseInt(dd)}일</span>
+                                {order.truck_type && <span className="text-xs text-surface-500">· {order.truck_type}</span>}
+                              </div>
+                              <div className="text-xs text-surface-600 ml-6 mt-0.5">{order.order_number}</div>
+                            </td>
+                            <td className="px-2 py-2.5 text-right pr-3">
+                              <div className="flex items-center gap-2 justify-end">
+                                <span className="text-xs font-mono text-primary-400 font-bold">{order.total_quantity}개</span>
+                                <button onClick={e => { e.stopPropagation(); selectOrder(order) }}
+                                  className="flex items-center gap-1 px-2 py-1 bg-primary-500/15 hover:bg-primary-500/25 text-primary-400 rounded-lg text-xs font-medium transition-colors whitespace-nowrap">
+                                  <Pencil size={10} /> 편집
+                                </button>
+                                <button onClick={e => { e.stopPropagation(); deleteOrder(order.id) }} disabled={deleting.has(order.id)}
+                                  className="p-1 hover:bg-red-500/10 text-surface-600 hover:text-red-400 rounded transition-colors">
+                                  <Trash2 size={11} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>,
+                          ...(!dateOpen ? [] : Object.entries(prodMap).flatMap(([prodName, pitems]) => {
+                            const prodKey = `${date}-${prodName}`
+                            const prodOpen = expandedProds[prodKey] ?? false
+                            const prodQty = pitems.reduce((s, it) => s + (it.quantity || 0), 0)
+                            return [
+                              <tr key={`p-${prodKey}`} className="border-b border-surface-800/20 hover:bg-surface-800/10 cursor-pointer" onClick={() => setExpandedProds(p => ({ ...p, [prodKey]: !prodOpen }))}>
+                                <td />
+                                <td className="px-2 py-1.5 pl-10">
+                                  <div className="flex items-center gap-2">
+                                    {prodOpen ? <ChevronDown size={11} className="text-surface-500" /> : <ChevronRight size={11} className="text-surface-500" />}
+                                    <span className="text-xs font-medium text-white">{prodName}</span>
+                                  </div>
+                                </td>
+                                <td className="px-2 py-1.5 text-right pr-3 text-xs font-mono text-surface-400">{prodQty}</td>
+                              </tr>,
+                              ...(!prodOpen ? [] : pitems.map(it => {
+                                const opt = [it.product_skus?.o1?.option_value, it.product_skus?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
+                                return (
+                                  <tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10 hover:bg-surface-800/5">
+                                    <td />
+                                    <td className="px-2 py-1.5 pl-16">
+                                      <div className="flex items-center gap-1.5 text-xs text-surface-400">
+                                        <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />{opt}
+                                      </div>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right pr-3 text-xs font-mono text-primary-400 font-bold">+{it.quantity}</td>
+                                  </tr>
+                                )
+                              }))
+                            ]
+                          }))
+                        ]
+                      }))
+                    ]
+                  })}
+                </tbody>
+              </table>
             )}
-            <div className="bg-surface-900 border border-surface-800 rounded-2xl p-4">
-              <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wide mb-3">입고 정보</h3>
-              <InboundInfoForm values={info} onChange={(k, v) => setInfo(p => ({ ...p, [k]: v }))} />
+          </div>
+        )}
+      </div>
+
+      {!selectedOrder ? (
+        <div className="flex flex-col items-center justify-center py-20 text-surface-500 bg-surface-900 border border-surface-800 rounded-2xl">
+          <PackageCheck size={32} className="mb-2 opacity-30" />
+          <p className="text-sm">왼쪽 목록에서 편집 버튼을 클릭하세요</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="bg-surface-900 border border-surface-800 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-white text-sm">{selectedOrder.order_number} - 입고 목록</h2>
+              <button onClick={() => setAddingProduct(!addingProduct)} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-500/15 hover:bg-primary-500/25 text-primary-400 rounded-lg text-xs font-medium">
+                <Plus size={12} /> 상품 추가
+              </button>
             </div>
-            <button onClick={saveOrder} disabled={saving} className="w-full flex items-center justify-center gap-2 bg-primary-500 hover:bg-primary-600 disabled:opacity-50 text-white py-3 rounded-xl font-semibold transition-colors">
+            {loadingItems
+              ? <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
+              : <InboundItemsTree items={orderItems} onUpdateQty={updateQty} onDeleteItems={deleteItems} categoryMap={categoryMap} productMap={productMap} />
+            }
+          </div>
+          {addingProduct && (
+            <div className="bg-surface-900 border border-primary-500/30 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-primary-400">상품 추가</p>
+                <button onClick={() => setAddingProduct(false)} className="text-surface-400 hover:text-white"><X size={15} /></button>
+              </div>
+              <ProductTreeSelector categories={categories} products={products} skusByProduct={skusByProduct} existingSkuIds={existingSkuIds} onAddItems={addItems} />
+            </div>
+          )}
+          <div className="bg-surface-900 border border-surface-800 rounded-2xl p-4">
+            <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wide mb-3">입고 정보</h3>
+            <InboundInfoForm values={info} onChange={(k, v) => setInfo(p => ({ ...p, [k]: v }))} />
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => setSelectedOrder(null)} className="px-4 py-3 bg-surface-700 hover:bg-surface-600 text-surface-300 rounded-xl text-sm font-medium">취소</button>
+            <button onClick={saveOrder} disabled={saving}
+              className="flex-1 flex items-center justify-center gap-2 bg-primary-500 hover:bg-primary-600 disabled:opacity-50 text-white py-3 rounded-xl font-semibold transition-colors">
               <Save size={16} />{saving ? '저장 중...' : '수정 저장'}
             </button>
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -671,269 +894,210 @@ function InboundHistory({ categories }) {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [expandedId, setExpandedId] = useState(null)
-  const [detailItems, setDetailItems] = useState([])
-  const [detailLoading, setDetailLoading] = useState(false)
-  const categoryMap = Object.fromEntries(categories.map(c => [c.id, c.name]))
+  const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()))
+  const [expandedMonths, setExpandedMonths] = useState({})
+  const [expandedDates, setExpandedDates] = useState({})
+  const [expandedProds, setExpandedProds] = useState({})
 
-  useEffect(() => { loadOrders() }, [])
+  const years = useMemo(() => {
+    const y = new Date().getFullYear()
+    return [y, y-1, y-2, y-3].map(String)
+  }, [])
+
+  useEffect(() => { loadOrders() }, [yearFilter])
 
   async function loadOrders() {
     setLoading(true)
-    const { data } = await supabase.from('inbound_orders').select('*, inbound_items(count)').eq('order_type', 'inbound').order('created_at', { ascending: false }).limit(300)
-    setOrders(data || []); setLoading(false)
-  }
-
-  async function loadDetail(orderId) {
-    if (expandedId === orderId) { setExpandedId(null); return }
-    setExpandedId(orderId); setDetailLoading(true)
-    const { data } = await supabase.from('inbound_items')
-      .select('id, quantity, final_stock, product_sku_id, product_skus(products(id, name, category_id), o1:option1_id(option_value), o2:option2_id(option_value))')
-      .eq('inbound_order_id', orderId)
-    setDetailItems(data || []); setDetailLoading(false)
+    let q = supabase.from('inbound_orders')
+      .select('id, order_number, inbound_date, total_quantity, truck_type, box_count, tax_paid, goods_amount, bl_number, created_at, inbound_items(id, quantity, final_stock, product_sku_id, product_skus(products(id, name, category_id), o1:option1_id(option_value), o2:option2_id(option_value)))')
+      .eq('order_type', 'inbound')
+      .order('inbound_date', { ascending: false }).order('created_at', { ascending: false }).limit(300)
+    if (yearFilter) q = q.gte('inbound_date', `${yearFilter}-01-01`).lte('inbound_date', `${yearFilter}-12-31`)
+    const { data } = await q
+    setOrders(data || [])
+    setLoading(false)
   }
 
   const filtered = useMemo(() => {
     if (!search.trim()) return orders
-    return orders.filter(o => (o.order_name || o.order_number || '').toLowerCase().includes(search.toLowerCase()))
+    return orders.filter(o => (o.order_number || '').toLowerCase().includes(search.toLowerCase()))
   }, [orders, search])
 
-  function buildTree(items) {
-    const tree = {}
-    items.forEach(it => {
-      const catId = it.product_skus?.products?.category_id || '__none__'
-      const prodId = it.product_skus?.products?.id || '__none__'
-      if (!tree[catId]) tree[catId] = {}
-      if (!tree[catId][prodId]) tree[catId][prodId] = []
-      tree[catId][prodId].push(it)
+  const tree = useMemo(() => {
+    const months = {}
+    filtered.forEach(order => {
+      const date = order.inbound_date || order.created_at?.slice(0, 10) || ''
+      const month = date.slice(0, 7)
+      if (!months[month]) months[month] = {}
+      months[month][date] = order
     })
-    return tree
-  }
+    return Object.entries(months).sort((a, b) => b[0].localeCompare(a[0]))
+  }, [filtered])
 
   async function downloadOrderExcel(order) {
     try {
-      // 1. Fetch inbound items with SKU info
-      const { data: rawItems } = await supabase.from('inbound_items')
-        .select('id, quantity, product_sku_id')
-        .eq('inbound_order_id', order.id)
+      const { data: rawItems } = await supabase.from('inbound_items').select('id, quantity, product_sku_id').eq('inbound_order_id', order.id)
       if (!rawItems?.length) return toast.error('입고 항목이 없습니다')
-
-      // 2. Fetch SKU details separately (no FK join)
       const skuIds = rawItems.map(it => it.product_sku_id)
-      const { data: skuRows } = await supabase.from('product_skus')
-        .select('id, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)')
-        .in('id', skuIds)
-      const { data: prodRows } = await supabase.from('products')
-        .select('id, name, storage_location_text, category_id, categories(name)')
-        .in('id', [...new Set((skuRows||[]).map(s => s.product_id))])
-
+      const { data: skuRows } = await supabase.from('product_skus').select('id, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').in('id', skuIds)
+      const { data: prodRows } = await supabase.from('products').select('id, name, storage_location_text, category_id, categories(name)').in('id', [...new Set((skuRows||[]).map(s => s.product_id))])
       const skuMap = Object.fromEntries((skuRows||[]).map(s => [s.id, s]))
       const prodMap2 = Object.fromEntries((prodRows||[]).map(p => [p.id, p]))
-
-      // Build items with full data
-      const items = rawItems.map(it => {
-        const sku = skuMap[it.product_sku_id] || {}
-        const prod = prodMap2[sku.product_id] || {}
-        return { ...it, sku, prod }
-      })
-
-      const workbook = new ExcelJS.Workbook()
-      workbook.creator = 'StockOS'
-
-      // Group by product
+      const items = rawItems.map(it => { const sku = skuMap[it.product_sku_id] || {}; const prod = prodMap2[sku.product_id] || {}; return { ...it, sku, prod } })
+      const workbook = new ExcelJS.Workbook(); workbook.creator = 'StockOS'
       const grouped = new Map()
-      items.forEach(it => {
-        const pid = it.prod.id || 'unknown'
-        if (!grouped.has(pid)) grouped.set(pid, { prod: it.prod, items: [] })
-        grouped.get(pid).items.push(it)
-      })
-
+      items.forEach(it => { const pid = it.prod.id || 'unknown'; if (!grouped.has(pid)) grouped.set(pid, { prod: it.prod, items: [] }); grouped.get(pid).items.push(it) })
       for (const { prod, items: pitems } of grouped.values()) {
-        const sheetName = (prod.name || 'Sheet').replace(/[:\/\[\]*?]/g, '').slice(0, 31)
+        const sheetName = (prod.name || 'Sheet').replace(/[:/\[\]*?]/g, '').slice(0, 31)
         const ws = workbook.addWorksheet(sheetName)
-        // 입고 정보 헤더 (검은 배경, 흰 텍스트)
+        const IB = { top: { style: 'thin', color: { argb: 'FF2E5FA3' } }, bottom: { style: 'thin', color: { argb: 'FF2E5FA3' } }, left: { style: 'thin', color: { argb: 'FF2E5FA3' } }, right: { style: 'thin', color: { argb: 'FF2E5FA3' } } }
+        const CB = { top: { style: 'thin', color: { argb: 'FF999999' } }, bottom: { style: 'thin', color: { argb: 'FF999999' } }, left: { style: 'thin', color: { argb: 'FF999999' } }, right: { style: 'thin', color: { argb: 'FF999999' } } }
         const infoRows = [
-          ['입고명', order.order_name || order.order_number || ''],
-          ['입고일', order.inbound_date || order.created_at?.slice(0, 10) || ''],
-          ['상품명', prod.name || ''],
-          ['카테고리', prod.categories?.name || ''],
-          ['보관위치', prod.storage_location_text || ''],
-          ['트럭정보', order.truck_type || ''],
-          ['박스수량', order.box_count ? String(order.box_count) : ''],
-          ['세금/금액', order.tax_paid ? `₩${Number(order.tax_paid).toLocaleString()}` : ''],
-          []
+          ['입고번호', order.order_number||''], ['입고일', order.inbound_date||''], ['상품명', prod.name||''],
+          ['트럭정보', order.truck_type||''], ['박스수량', order.box_count ? String(order.box_count) : ''],
+          ['통관비용', order.tax_paid ? `₩${Number(order.tax_paid).toLocaleString()}` : ''],
+          ['상품총액', order.goods_amount ? `₩${Number(order.goods_amount).toLocaleString()}` : ''], []
         ]
-        infoRows.forEach((r, i) => {
-          const row = ws.addRow(r)
-          if (r.length > 0) {
-            row.getCell(1).font = { bold: true, size: 10 }
-            row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } }
-            row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } }
-          }
-        })
-
-        // 옵션 행렬: 행=옵션1, 열=옵션2
-        const opt1Map = new Map(), opt2Map = new Map()
-        pitems.forEach(it => {
-          const s = it.sku
-          if (s.o1) opt1Map.set(s.o1.option_value, s.o1)
-          else opt1Map.set('Default', { option_value: 'Default', sort_order: 0 })
-          if (s.o2) opt2Map.set(s.o2.option_value, s.o2)
-        })
-        const opt1Vals = [...opt1Map.values()].sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
-        const opt2Vals = [...opt2Map.values()].sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
-        const hasOpt2 = opt2Vals.length > 0
-
-        if (!hasOpt2) {
-          // 옵션 1개: 2열 (옵션명, 수량)
-          const hRow = ws.addRow(['옵션', '입고수량'])
-          hRow.eachCell(cell => {
-            cell.font = { bold: true, color: { argb: 'FF000000' } }
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA9D18E' } }
-          })
-          opt1Vals.forEach(v1 => {
-            const item = pitems.find(it => (it.sku.o1?.option_value || 'Default') === v1.option_value)
-            const qty = item?.quantity ?? 0
-            const dr = ws.addRow([v1.option_value, qty])
-            dr.getCell(2).alignment = { horizontal: 'center' }
-            dr.eachCell(cell => { cell.border = CB })
-          })
-        } else {
-          // 요청: 열=옵션2(가로 헤더), 행=옵션1(세로 레이블)
-          // 헤더행: 코너=[opt1명 \ opt2명], 나머지 열 = opt2 값들
-          const o1Name = opt1Vals[0]?.option_name || '옵션1'
-          const o2Name = opt2Vals[0]?.option_name || '옵션2'
-          // 헤더: 첫 셀 = "옵션1명 \ 옵션2명", 이후 셀들 = opt2 값 (열 헤더)
-          const headerCells = [o1Name + ' \\ ' + o2Name, ...opt2Vals.map(v => v.option_value)]
-          const hRow = ws.addRow(headerCells)
-          hRow.eachCell(cell => {
-            cell.font = { bold: true, color: { argb: 'FF000000' } }
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA9D18E' } }
-            cell.alignment = { horizontal: 'center' }
-          })
-          hRow.getCell(1).alignment = { horizontal: 'left' }
-          // 각 행: 첫 셀 = opt1 값 (행 레이블), 이후 = opt2 각 열의 수량
-          opt1Vals.forEach(v1 => {
-            const cells = [v1.option_value]
-            opt2Vals.forEach(v2 => {
-              const found = pitems.find(it =>
-                (it.sku.o1?.option_value || 'Default') === v1.option_value &&
-                it.sku.o2?.option_value === v2.option_value
-              )
-              cells.push(found ? found.quantity : null)
-            })
-            const dr = ws.addRow(cells)
-            dr.getCell(1).font = { bold: true }
-            for (let ci = 2; ci <= cells.length; ci++) dr.getCell(ci).alignment = { horizontal: 'center' }
-            dr.eachCell(cell => { cell.border = CB2 })
-          })
-        }
-        // 셀 너비 자동
-        ws.columns.forEach(col => {
-          let maxLen = 8
-          col.eachCell({ includeEmpty: false }, cell => {
-            const v = cell.value; const len = v ? (typeof v === 'number' ? String(v).length : String(v).length * 1.4) : 0
-            if (len > maxLen) maxLen = len
-          })
-          col.width = Math.min(maxLen + 2, 40)
-        })
+        infoRows.forEach(r => { const row = ws.addRow(r); if (r.length > 0 && r[0]) { row.getCell(1).font={bold:true,color:{argb:'FFFFFFFF'},size:10}; row.getCell(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4472C4'}}; row.getCell(1).border=IB; row.getCell(2).font={color:{argb:'FFFFFFFF'},size:10}; row.getCell(2).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4472C4'}}; row.getCell(2).border=IB } })
+        const opt1Map=new Map(), opt2Map=new Map()
+        pitems.forEach(it => { const s=it.sku; if(s.o1) opt1Map.set(s.o1.option_value,s.o1); else opt1Map.set('Default',{option_value:'Default',sort_order:0}); if(s.o2) opt2Map.set(s.o2.option_value,s.o2) })
+        const opt1Vals=[...opt1Map.values()].sort((a,b)=>(a.sort_order||0)-(b.sort_order||0))
+        const opt2Vals=[...opt2Map.values()].sort((a,b)=>(a.sort_order||0)-(b.sort_order||0))
+        const hasOpt2=opt2Vals.length>0
+        if (!hasOpt2) { const hRow=ws.addRow(['옵션','입고수량']); hRow.eachCell(cell=>{cell.font={bold:true};cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFA9D18E'}}; cell.border=CB}); opt1Vals.forEach(v1=>{const item=pitems.find(it=>(it.sku.o1?.option_value||'Default')===v1.option_value);const dr=ws.addRow([v1.option_value,item?.quantity??0]);dr.getCell(2).alignment={horizontal:'center'};dr.eachCell(cell=>{cell.border=CB})}) }
+        else { const hRow=ws.addRow([`${opt1Vals[0]?.option_name||'옵션1'}\\${opt2Vals[0]?.option_name||'옵션2'}`,...opt2Vals.map(v=>v.option_value)]); hRow.eachCell(cell=>{cell.font={bold:true};cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFA9D18E'}};cell.alignment={horizontal:'center'};cell.border=CB}); opt1Vals.forEach(v1=>{const cells=[v1.option_value];opt2Vals.forEach(v2=>{const found=pitems.find(it=>(it.sku.o1?.option_value||'Default')===v1.option_value&&it.sku.o2?.option_value===v2.option_value);cells.push(found?found.quantity:null)});const dr=ws.addRow(cells);dr.getCell(1).font={bold:true};for(let ci=2;ci<=cells.length;ci++)dr.getCell(ci).alignment={horizontal:'center'};dr.eachCell(cell=>{cell.border=CB})}) }
+        ws.columns.forEach(col=>{let maxLen=8;col.eachCell({includeEmpty:false},cell=>{const v=cell.value;const len=v?(typeof v==='number'?String(v).length:String(v).length*1.4):0;if(len>maxLen)maxLen=len});col.width=Math.min(maxLen+2,40)})
       }
-
-      const buffer = await workbook.xlsx.writeBuffer()
-      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `입고_${order.order_name || order.order_number}_${new Date().toISOString().slice(0,10)}.xlsx`
-      a.click(); URL.revokeObjectURL(url)
+      const buffer=await workbook.xlsx.writeBuffer()
+      const blob=new Blob([buffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+      const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url
+      a.download=`입고_${order.order_number}_${new Date().toISOString().slice(0,10)}.xlsx`; a.click(); URL.revokeObjectURL(url)
       toast.success('엑셀 다운로드 완료')
-    } catch(err) { console.error(err); toast.error('다운로드 실패: ' + err.message) }
+    } catch(err) { console.error(err); toast.error('다운로드 실패: '+err.message) }
   }
 
   return (
     <div className="space-y-4">
-      <div className="relative max-w-sm">
-        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500" />
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="입고명 또는 번호 검색..."
-          className="w-full bg-surface-800 border border-surface-700 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-surface-500 focus:outline-none focus:border-primary-500" />
-      </div>
-      {loading ? <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
-        : filtered.length === 0 ? <p className="text-center py-10 text-surface-500 text-sm">입고 이력이 없습니다</p>
-        : <div className="space-y-2">
-          {filtered.map(order => {
-            const isOpen = expandedId === order.id
-            const itemCount = order.inbound_items?.[0]?.count || 0
-            return (
-              <div key={order.id} className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden">
-                <div className="flex items-center">
-                <button onClick={() => loadDetail(order.id)} className="flex-1 flex items-center gap-3 px-4 py-3.5 hover:bg-surface-800/30 transition-colors text-left">
-                  {isOpen ? <ChevronDown size={15} className="text-surface-400 shrink-0" /> : <ChevronRight size={15} className="text-surface-400 shrink-0" />}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-white text-sm">{order.order_name || order.order_number}</span>
-                      {order.total_quantity > 0 && <span className="text-xs bg-primary-500/15 text-primary-400 px-2 py-0.5 rounded">{order.total_quantity}개</span>}
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      <span className="text-xs text-surface-500">{order.inbound_date || order.created_at?.slice(0, 10)}</span>
-                      {order.truck_type && <span className="text-xs text-surface-600">{order.truck_type}</span>}
-                      {order.tax_paid > 0 && <span className="text-xs text-surface-600">₩{Number(order.tax_paid).toLocaleString()}</span>}
-                      {order.box_count > 0 && <span className="text-xs text-surface-600">박스 {order.box_count}개</span>}
-                    </div>
-                  </div>
-                </button>
-                <button onClick={e => { e.stopPropagation(); downloadOrderExcel(order) }}
-                  className="flex items-center gap-1.5 px-3 py-2 mx-2 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-xl text-xs font-medium transition-colors shrink-0">
-                  <Download size={12} /> 엑셀
-                </button>
-              </div>
-                {isOpen && (
-                  <div className="border-t border-surface-800 p-4">
-                    {detailLoading ? <div className="flex justify-center py-4"><div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
-                      : (() => {
-                        const tree = buildTree(detailItems)
-                        return (
-                          <div className="space-y-1">
-                            {Object.entries(tree).map(([catId, prods]) => (
-                              <div key={catId} className="border border-surface-700 rounded-xl overflow-hidden">
-                                <div className="flex items-center gap-2 px-3 py-2 bg-surface-800/40">
-                                  <span className="text-xs font-semibold text-surface-300">{catId === '__none__' ? '미분류' : (categoryMap[catId] || '카테고리')}</span>
-                                </div>
-                                {Object.entries(prods).map(([prodId, pitems]) => (
-                                  <div key={prodId}>
-                                    <div className="flex items-center gap-2 pl-4 pr-3 py-1.5 border-t border-surface-700/50 bg-surface-800/10">
-                                      <span className="text-xs font-medium text-white flex-1">{pitems[0]?.product_skus?.products?.name || '상품'}</span>
-                                      <span className="text-xs text-surface-500">{pitems.length}개 옵션</span>
-                                    </div>
-                                    {pitems.map(item => {
-                                      const opt = [item.product_skus?.o1?.option_value, item.product_skus?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
-                                      return (
-                                        <div key={item.id} className="flex items-center justify-between pl-8 pr-3 py-1.5 border-t border-surface-800/20">
-                                          <span className="text-xs text-surface-300">{opt}</span>
-                                          <div className="flex items-center gap-3">
-                                            <span className="text-xs text-primary-400 font-mono font-bold">+{item.quantity}개</span>
-                                            <span className="text-xs text-surface-500">입고후 재고: {item.final_stock}</span>
-                                          </div>
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        )
-                      })()
-                    }
-                  </div>
-                )}
-              </div>
-            )
-          })}
+      <div className="flex gap-3 flex-wrap">
+        <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
+          className="bg-surface-800 border border-surface-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-primary-500 shrink-0">
+          <option value="">전체</option>
+          {years.map(y => <option key={y} value={y}>{y}년</option>)}
+        </select>
+        <div className="relative flex-1 min-w-48">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="번호 검색..."
+            className="w-full bg-surface-800 border border-surface-700 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white placeholder-surface-500 focus:outline-none focus:border-primary-500" />
         </div>
-      }
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-8"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
+      ) : tree.length === 0 ? (
+        <p className="text-center py-10 text-surface-500 text-sm">입고 이력이 없습니다</p>
+      ) : (
+        <div className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-800/60 border-b border-surface-800">
+                <th className="px-4 py-3 text-left text-xs font-semibold text-surface-400">항목</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-surface-400 w-20">수량</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold text-surface-400 w-24">엑셀</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tree.map(([month, dates]) => {
+                const [y, m] = month.split('-')
+                const monthOpen = expandedMonths[month] ?? false
+                const monthQty = Object.values(dates).reduce((s, o) => s + (o.total_quantity || 0), 0)
+                return [
+                  <tr key={`m-${month}`} className="bg-surface-800/50 border-b border-surface-700/60 cursor-pointer hover:bg-surface-800 transition-colors"
+                    onClick={() => setExpandedMonths(p => ({ ...p, [month]: !monthOpen }))}>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        {monthOpen ? <ChevronDown size={13} className="text-surface-500" /> : <ChevronRight size={13} className="text-surface-500" />}
+                        <span className="text-sm font-bold text-surface-200">{y}년 {parseInt(m)}월</span>
+                        <span className="text-xs text-surface-600">({Object.keys(dates).length}건)</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono font-bold text-primary-400 text-sm">{monthQty}</td>
+                    <td />
+                  </tr>,
+                  ...(!monthOpen ? [] : Object.entries(dates).sort((a, b) => b[0].localeCompare(a[0])).flatMap(([date, order]) => {
+                    const [,, dd] = date.split('-')
+                    const dateOpen = expandedDates[date] ?? false
+                    const items = order.inbound_items || []
+                    const prodMap = {}
+                    items.forEach(it => { const pn = it.product_skus?.products?.name || '상품'; if (!prodMap[pn]) prodMap[pn] = []; prodMap[pn].push(it) })
+                    return [
+                      <tr key={`d-${date}`} className="border-b border-surface-800/40 hover:bg-surface-800/20 cursor-pointer transition-colors"
+                        onClick={() => setExpandedDates(p => ({ ...p, [date]: !dateOpen }))}>
+                        <td className="px-4 py-2.5 pl-8">
+                          <div className="flex items-center gap-2">
+                            {dateOpen ? <ChevronDown size={12} className="text-surface-500" /> : <ChevronRight size={12} className="text-surface-500" />}
+                            <span className="font-medium text-white text-sm">{parseInt(m)}월 {parseInt(dd)}일</span>
+                            {order.truck_type && <span className="text-xs text-surface-500">· {order.truck_type}</span>}
+                          </div>
+                          <div className="flex items-center gap-3 ml-6 mt-0.5">
+                            <span className="text-xs text-surface-600">{order.order_number}</span>
+                            {order.goods_amount > 0 && <span className="text-xs text-emerald-400/70">상품총액 ₩{fmt(order.goods_amount)}</span>}
+                            {order.tax_paid > 0 && <span className="text-xs text-yellow-400/70">통관 ₩{fmt(order.tax_paid)}</span>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-center font-mono text-primary-400 font-bold">{order.total_quantity}</td>
+                        <td className="px-4 py-2.5 text-right" onClick={e => e.stopPropagation()}>
+                          <button onClick={() => downloadOrderExcel(order)}
+                            className="flex items-center gap-1 px-2 py-1 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg text-xs font-medium transition-colors ml-auto">
+                            <Download size={11} /> 엑셀
+                          </button>
+                        </td>
+                      </tr>,
+                      ...(!dateOpen ? [] : Object.entries(prodMap).flatMap(([prodName, pitems]) => {
+                        const prodKey = `${date}-${prodName}`
+                        const prodOpen = expandedProds[prodKey] ?? false
+                        const prodQty = pitems.reduce((s, it) => s + (it.quantity || 0), 0)
+                        return [
+                          <tr key={`p-${prodKey}`} className="border-b border-surface-800/20 hover:bg-surface-800/10 cursor-pointer"
+                            onClick={() => setExpandedProds(p => ({ ...p, [prodKey]: !prodOpen }))}>
+                            <td className="px-4 py-1.5 pl-14">
+                              <div className="flex items-center gap-2">
+                                {prodOpen ? <ChevronDown size={11} className="text-surface-500" /> : <ChevronRight size={11} className="text-surface-500" />}
+                                <span className="text-xs font-medium text-white">{prodName}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-1.5 text-center font-mono text-surface-400 text-xs">{prodQty}</td>
+                            <td />
+                          </tr>,
+                          ...(!prodOpen ? [] : pitems.map(it => {
+                            const opt = [it.product_skus?.o1?.option_value, it.product_skus?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
+                            return (
+                              <tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10 hover:bg-surface-800/5">
+                                <td className="px-4 py-1.5 pl-20">
+                                  <div className="flex items-center gap-1.5 text-xs text-surface-400">
+                                    <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />{opt}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-1.5 text-center font-mono font-bold text-primary-400 text-sm">+{it.quantity}</td>
+                                <td />
+                              </tr>
+                            )
+                          }))
+                        ]
+                      }))
+                    ]
+                  }))
+                ]
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
+
+// ── 입고 차트 ─────────────────────────────────────────────
+const CHART_COLORS = ['#0ea5e9','#38bdf8','#a78bfa','#34d399','#fb923c','#f472b6','#facc15','#60a5fa']
+
 
 // ── 메인 ─────────────────────────────────────────────────
 export default function InboundPage() {
@@ -969,7 +1133,7 @@ export default function InboundPage() {
         <span className="text-xs bg-primary-500/20 text-primary-400 px-2.5 py-1 rounded-lg font-medium">재고 입고</span>
       </div>
       {mode === null ? (
-        <div className="grid sm:grid-cols-3 gap-4 mt-2">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-2">
           {TABS.map(tab => {
             const Icon = tab.icon
             return (
