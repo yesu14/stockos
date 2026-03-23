@@ -130,7 +130,7 @@ export default function Dashboard() {
       {/* 헤더 */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-white">대시보드</h1>
+          <h1 className="text-2xl font-bold text-glow" style={{background:'linear-gradient(135deg,rgb(var(--primary-300)),rgb(var(--primary-500)))',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',backgroundClip:'text'}}>대시보드</h1>
           <p className="text-surface-400 text-sm mt-0.5">재고 현황 개요</p>
         </div>
         <div className="flex items-center gap-2">
@@ -169,14 +169,14 @@ export default function Dashboard() {
       </div>
 
       {stats.lowStock > 0 && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex items-center gap-3">
+        <div className="rounded-xl p-3 flex items-center gap-3" style={{background:'rgba(239,68,68,0.08)',border:'1px solid rgba(239,68,68,0.25)',boxShadow:'0 0 16px rgba(239,68,68,0.1)'}}>
           <AlertTriangle size={16} className="text-red-400 shrink-0" />
           <p className="text-red-400 text-xs">{stats.lowStock}개 SKU의 재고가 알림 기준 이하입니다.</p>
         </div>
       )}
 
       {/* 1. 매출 라인 차트 - 전체 가로 */}
-      <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
+      <div className="cyber-card p-5 rounded-2xl">
         <div className="flex items-center gap-2 mb-4">
           <TrendingUp size={16} className="text-primary-400" />
           <h2 className="text-base font-semibold text-white">일별 매출</h2>
@@ -204,7 +204,7 @@ export default function Dashboard() {
       {/* 2+3. 판매량 & 반품 순위 - 나란히 */}
       <div className="grid lg:grid-cols-2 gap-5">
         {/* 판매량 순위 */}
-        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
+        <div className="cyber-card p-5 rounded-2xl">
           <div className="flex items-center gap-2 mb-4">
             <ShoppingCart size={16} className="text-primary-400" />
             <h2 className="text-base font-semibold text-white">판매량 순위</h2>
@@ -230,7 +230,7 @@ export default function Dashboard() {
         </div>
 
         {/* 반품 순위 */}
-        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
+        <div className="cyber-card p-5 rounded-2xl">
           <div className="flex items-center gap-2 mb-4">
             <RotateCcw size={16} className="text-orange-400" />
             <h2 className="text-base font-semibold text-white">반품 순위</h2>
