@@ -18,21 +18,21 @@
   --primary-800: 21  94  117;
   --primary-900: 22  78  99;
 
-  /* surface: 밝은 사이버 블루-그레이 계열 */
-  --surface-50:  240 248 255;
-  --surface-100: 224 240 252;
-  --surface-200: 190 218 245;
-  --surface-300: 148 188 228;
-  --surface-400: 100 148 200;
-  --surface-500: 65  110 165;
-  --surface-600: 42  78  128;
-  --surface-700: 28  52  95;
-  --surface-800: 18  34  68;   /* 카드 배경 — 중간 블루 */
-  --surface-900: 10  20  48;   /* 패널 배경 */
-  --surface-950: 6   12  30;   /* 최하단 페이지 배경 */
+  /* surface: 다크 회색 계열 (blue tint 제거) */
+  --surface-50:  248 250 252;  /* 거의 흰색 — 텍스트 */
+  --surface-100: 241 245 249;  /* 밝은 텍스트 */
+  --surface-200: 220 228 238;  /* 보조 텍스트 */
+  --surface-300: 190 200 216;
+  --surface-400: 148 160 178;
+  --surface-500: 100 112 130;
+  --surface-600: 68  78  95;
+  --surface-700: 45  52  65;   /* 구분선 */
+  --surface-800: 30  34  44;   /* 카드 배경 */
+  --surface-900: 20  23  32;   /* 패널/사이드바 */
+  --surface-950: 13  15  22;   /* 페이지 배경 */
 }
 
-/* ── 라이트 테마 ──────────────────────────────────────── */
+/* ── 라이트 테마: 흰색 배경 + 진한 글자 ─────────────────── */
 .theme-light {
   --primary-50:  239 246 255;
   --primary-100: 219 234 254;
@@ -44,17 +44,19 @@
   --primary-700: 29  78  216;
   --primary-800: 30  64  175;
   --primary-900: 30  58  138;
-  --surface-50:  15  23  42;
-  --surface-100: 30  41  59;
-  --surface-200: 51  65  85;
-  --surface-300: 71  85  105;
-  --surface-400: 100 116 139;
-  --surface-500: 148 163 184;
-  --surface-600: 203 213 225;
-  --surface-700: 226 232 240;
-  --surface-800: 241 245 249;
-  --surface-900: 255 255 255;
-  --surface-950: 248 250 252;
+
+  /* 라이트: 어두운 쪽이 텍스트, 밝은 쪽이 배경 */
+  --surface-50:  15  23  42;   /* 가장 진한 텍스트 */
+  --surface-100: 30  41  59;   /* 본문 텍스트 */
+  --surface-200: 51  65  85;   /* 보조 텍스트 */
+  --surface-300: 75  90  115;
+  --surface-400: 108 120 142;
+  --surface-500: 148 160 178;
+  --surface-600: 200 210 225;  /* 구분선 */
+  --surface-700: 220 228 240;  /* 테두리 */
+  --surface-800: 240 244 250;  /* 카드 배경 — 아주 연한 회색 */
+  --surface-900: 248 250 253;  /* 패널 배경 — 거의 흰색 */
+  --surface-950: 255 255 255;  /* 페이지 배경 — 순수 흰색 */
 }
 
 /* ── 미드나잇 퍼플 ────────────────────────────────────── */
@@ -121,10 +123,8 @@
   body {
     @apply bg-surface-950 text-surface-100;
     overscroll-behavior: none;
-    /* Cyan 방사형 글로우 배경 */
     background-image:
-      radial-gradient(ellipse 70% 40% at 50% 0%, rgba(6,182,212,0.12) 0%, transparent 65%),
-      radial-gradient(ellipse 50% 30% at 80% 80%, rgba(6,182,212,0.06) 0%, transparent 60%);
+      radial-gradient(ellipse 60% 35% at 50% 0%, rgba(6,182,212,0.08) 0%, transparent 60%);
   }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -146,45 +146,40 @@
 ═══════════════════════════════════════════════════════ */
 @layer components {
 
-  /* ── 사이드바 — 진한 네이비, 콘텐츠와 명확히 구분 ── */
+  /* ── 사이드바 ── */
   .sidebar-bg {
-    background: linear-gradient(180deg, #0a1628 0%, #081220 100%);
-    border-right: 1px solid rgba(6,182,212,0.35);
-    box-shadow: 4px 0 24px rgba(0,0,0,0.5), 4px 0 8px rgba(6,182,212,0.08);
+    background: rgb(var(--surface-900));
+    border-right: 1px solid rgba(var(--primary-500), 0.3);
+    box-shadow: 3px 0 16px rgba(0,0,0,0.35);
   }
 
-  /* ── 헤더 — 사이드바와 같은 어두운 네이비 계열 ── */
+  /* ── 헤더 ── */
   .header-bg {
-    background: linear-gradient(90deg, #0a1628 0%, #0c1a32 100%);
-    border-bottom: 1px solid rgba(6,182,212,0.35);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 1px 0 rgba(34,211,238,0.12);
+    background: rgb(var(--surface-900));
+    border-bottom: 1px solid rgba(var(--primary-500), 0.3);
+    box-shadow: 0 3px 14px rgba(0,0,0,0.3);
   }
 
-  /* ── 카드 — 배경보다 눈에 띄게 밝은 블루 ── */
+  /* ── 카드 ── */
   .cyber-card {
-    background: linear-gradient(135deg, rgba(18,34,68,1) 0%, rgba(14,26,54,1) 100%);
-    border: 1px solid rgba(6,182,212,0.28);
+    background: rgb(var(--surface-900));
+    border: 1px solid rgba(var(--primary-500), 0.2);
     border-radius: 1rem;
     position: relative;
     overflow: hidden;
     transition: border-color 0.25s, box-shadow 0.25s;
-    box-shadow:
-      0 2px 16px rgba(0,0,0,0.5),
-      inset 0 1px 0 rgba(34,211,238,0.08);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.25), inset 0 1px 0 rgba(var(--primary-300),0.05);
   }
   .cyber-card::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(135deg, rgba(6,182,212,0.06) 0%, transparent 50%);
+    background: linear-gradient(135deg, rgba(var(--primary-500),0.04) 0%, transparent 50%);
     pointer-events: none;
   }
   .cyber-card:hover {
-    border-color: rgba(34,211,238,0.55);
-    box-shadow:
-      0 0 28px rgba(6,182,212,0.2),
-      0 6px 24px rgba(0,0,0,0.5),
-      inset 0 1px 0 rgba(34,211,238,0.12);
+    border-color: rgba(var(--primary-400), 0.45);
+    box-shadow: 0 0 20px rgba(var(--primary-500),0.12), 0 6px 20px rgba(0,0,0,0.3);
   }
 
   /* ── 네온 버튼 ── */
@@ -227,14 +222,12 @@
   }
 }
 
-/* surface-900 카드 = 밝은 블루 배경 */
+/* surface-900 카드 — 다크: 진한 회색, 라이트: 흰색에서 CSS var로 자동 */
 .bg-surface-900 {
-  background: linear-gradient(135deg, rgba(18,34,68,1) 0%, rgba(14,26,54,1) 100%) !important;
+  background: rgb(var(--surface-900)) !important;
 }
-
-/* surface-800 = 살짝 더 밝게 */
 .bg-surface-800 {
-  background: rgba(22,40,80,1) !important;
+  background: rgb(var(--surface-800)) !important;
 }
 
 /* 입력창 포커스 글로우 */

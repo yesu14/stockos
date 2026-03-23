@@ -329,7 +329,7 @@ export default function Layout() {
           </aside>
         </div>
       )}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative" style={{background:'linear-gradient(135deg,#0d1a38 0%,#091428 100%)'}}>
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative" style={{background:'rgb(var(--surface-950))'}}>
         {/* ── 상단 헤더 ── */}
         <header className="flex items-center gap-2 px-5 py-3 header-bg shrink-0">
           <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden text-surface-400 hover:text-white">
