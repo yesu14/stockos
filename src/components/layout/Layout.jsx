@@ -195,8 +195,8 @@ export default function Layout() {
       <div className="relative" data-theme-picker>
         <button onClick={() => setShowThemePicker(p => !p)} title="테마 변경"
           className={isIconOnly
-            ? 'flex items-center justify-center p-2.5 rounded-xl transition-colors text-surface-400 hover:bg-surface-800 hover:text-white w-full'
-            : 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors w-full text-surface-300 hover:bg-surface-800 hover:text-white'}>
+            ? 'flex items-center justify-center p-2.5 rounded-xl transition-colors text-surface-400 hover:bg-primary-500/10 hover:text-surface-50 w-full'
+            : 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors w-full text-surface-300 hover:bg-primary-500/10 hover:text-surface-50'}>
           <Palette size={isIconOnly ? 18 : 17} className="shrink-0" />
           {!isIconOnly && <>테마 변경<span className="ml-auto text-xs text-surface-500">{THEMES[theme]?.name || ''}</span></>}
         </button>
@@ -206,7 +206,7 @@ export default function Layout() {
             {Object.entries(THEMES).map(([key, td]) => (
               <button key={key} onClick={() => { setTheme(key); setShowThemePicker(false) }}
                 className={'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ' +
-                  (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-surface-800 hover:text-white')}>
+                  (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-primary-500/10 hover:text-surface-50')}>
                 <div className="w-4 h-4 rounded-full border border-surface-600 shrink-0" style={{ background: td.primary }} />
                 {td.name}
                 {theme === key && <span className="ml-auto">✓</span>}
@@ -234,7 +234,7 @@ export default function Layout() {
             </button>
           )}
           {isMobile && (
-            <button onClick={() => setMobileSidebarOpen(false)} className="text-surface-400 hover:text-white ml-1"><X size={18} /></button>
+            <button onClick={() => setMobileSidebarOpen(false)} className="text-surface-400 hover:text-surface-50 ml-1"><X size={18} /></button>
           )}
         </div>
 
@@ -247,7 +247,7 @@ export default function Layout() {
                 <NavLink key={menu.id} to={menu.url} onClick={onNav} title={menu.label}
                   className={({ isActive }) =>
                     'flex items-center justify-center p-2.5 rounded-xl transition-colors ' +
-                    (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-400 hover:bg-surface-800/60 hover:text-white')
+                    (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-400 hover:bg-primary-500/10 hover:text-surface-50')
                   }>
                   <Icon size={18} />
                 </NavLink>
@@ -257,7 +257,7 @@ export default function Layout() {
               <NavLink key={menu.id} to={menu.url} onClick={onNav}
                 className={({ isActive }) =>
                   'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ' +
-                  (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-300 hover:bg-surface-800/60 hover:text-white')
+                  (isActive ? 'bg-primary-500/20 text-primary-400' : 'text-surface-300 hover:bg-primary-500/10 hover:text-surface-50')
                 }>
                 <Icon size={17} className="shrink-0" />
                 {menu.label}
@@ -283,7 +283,7 @@ export default function Layout() {
     return (
       <div className="relative" data-user-menu>
         <button onClick={() => setShowMenu(p => !p)}
-          className="flex items-center gap-2 px-2 py-1.5 rounded-xl hover:bg-surface-800 transition-colors group">
+          className="flex items-center gap-2 px-2 py-1.5 rounded-xl hover:bg-primary-500/10 transition-colors group">
           <div className="relative">
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-md"
               style={{ background: 'linear-gradient(135deg, #22d3ee, #0891b2)' }}>
@@ -332,7 +332,7 @@ export default function Layout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative" style={{background:'rgb(var(--surface-950))'}}>
         {/* ── 상단 헤더 ── */}
         <header className="flex items-center gap-2 px-5 py-3 header-bg shrink-0">
-          <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden text-surface-400 hover:text-white">
+          <button onClick={() => setMobileSidebarOpen(true)} className="lg:hidden text-surface-400 hover:text-primary-500">
             <MenuIcon size={22} />
           </button>
           <div className="flex-1" />
@@ -347,7 +347,7 @@ export default function Layout() {
           {/* 테마 버튼 */}
           <div className="relative" data-theme-picker>
             <button onClick={() => setShowThemePicker(p => !p)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all hover:scale-105 text-surface-400 hover:text-white border-cyber bg-surface-800/50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all hover:scale-105 text-surface-400 hover:text-primary-400 border-cyber bg-surface-800/50"
               title="테마 변경">
               <Palette size={14} />
               <span className="hidden sm:inline">{THEMES[theme]?.name || '테마'}</span>
@@ -358,7 +358,7 @@ export default function Layout() {
                 {Object.entries(THEMES).map(([key, td]) => (
                   <button key={key} onClick={() => { setTheme(key); setShowThemePicker(false) }}
                     className={'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ' +
-                      (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-surface-800 hover:text-white')}>
+                      (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-primary-500/10 hover:text-surface-50')}>
                     <div className="w-4 h-4 rounded-full border border-surface-600 shrink-0" style={{ background: td.primary }} />
                     {td.name}
                     {theme === key && <span className="ml-auto">✓</span>}

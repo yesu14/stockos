@@ -18,18 +18,18 @@
   --primary-800: 21  94  117;
   --primary-900: 22  78  99;
 
-  /* surface: 다크 회색 계열 (blue tint 제거) */
-  --surface-50:  248 250 252;  /* 거의 흰색 — 텍스트 */
-  --surface-100: 241 245 249;  /* 밝은 텍스트 */
-  --surface-200: 220 228 238;  /* 보조 텍스트 */
-  --surface-300: 190 200 216;
-  --surface-400: 148 160 178;
-  --surface-500: 100 112 130;
-  --surface-600: 68  78  95;
-  --surface-700: 45  52  65;   /* 구분선 */
-  --surface-800: 30  34  44;   /* 카드 배경 */
-  --surface-900: 20  23  32;   /* 패널/사이드바 */
-  --surface-950: 13  15  22;   /* 페이지 배경 */
+  /* surface: 다크 회색 계열 — 한 단계 밝게 */
+  --surface-50:  250 252 255;  /* 텍스트 */
+  --surface-100: 244 247 252;  /* 밝은 텍스트 */
+  --surface-200: 226 232 242;  /* 보조 텍스트 */
+  --surface-300: 196 208 224;
+  --surface-400: 152 168 190;
+  --surface-500: 105 120 145;
+  --surface-600: 72  84  106;
+  --surface-700: 52  62  80;   /* 구분선 */
+  --surface-800: 58  68  92;   /* 카드 배경 — 가장 밝음 */
+  --surface-900: 30  36  52;   /* 사이드바/헤더 — 중간 */
+  --surface-950: 18  22  34;   /* 페이지 배경 — 가장 어두움 */
 }
 
 /* ── 라이트 테마: 흰색 배경 + 진한 글자 ─────────────────── */
@@ -251,6 +251,110 @@ tr:hover > td {
 button[class*="bg-primary-5"]:hover {
   box-shadow: 0 0 16px rgba(var(--primary-500), 0.4), 0 4px 12px rgba(0,0,0,0.25);
   transform: translateY(-1px);
+}
+
+/* ══════════════════════════════════════════════════════
+   라이트 테마 전역 오버라이드
+   흰색 글자 / 밝은 글자 클래스를 모두 진한 색으로 강제 변환
+══════════════════════════════════════════════════════ */
+
+/* ── 텍스트: white/밝은 계열 → 진한 네이비 ── */
+.theme-light .text-white,
+.theme-light .text-surface-50,
+.theme-light .text-surface-100,
+.theme-light .text-surface-200,
+.theme-light .text-surface-300 {
+  color: rgb(15, 23, 42) !important;
+}
+
+/* hover 시에도 */
+.theme-light .hover\:text-white:hover,
+.theme-light .hover\:text-surface-50:hover {
+  color: rgb(15, 23, 42) !important;
+}
+
+/* ── 보조 텍스트: surface-400~500 → 중간 회색 ── */
+.theme-light .text-surface-400 {
+  color: rgb(75, 90, 115) !important;
+}
+.theme-light .text-surface-500 {
+  color: rgb(100, 115, 140) !important;
+}
+.theme-light .text-surface-600 {
+  color: rgb(130, 145, 165) !important;
+}
+
+/* ── 배경: surface-800/900/950 → 밝은 흰색 계열 ── */
+.theme-light .bg-surface-950 {
+  background-color: rgb(255, 255, 255) !important;
+}
+.theme-light .bg-surface-900 {
+  background-color: rgb(248, 250, 253) !important;
+}
+.theme-light .bg-surface-800 {
+  background-color: rgb(238, 243, 250) !important;
+}
+.theme-light .bg-surface-700 {
+  background-color: rgb(226, 232, 242) !important;
+}
+
+/* hover 배경 */
+.theme-light .hover\:bg-surface-800:hover,
+.theme-light .hover\:bg-surface-700:hover {
+  background-color: rgba(6, 182, 212, 0.1) !important;
+}
+.theme-light .hover\:bg-surface-800\/60:hover,
+.theme-light .hover\:bg-surface-800\/20:hover {
+  background-color: rgba(6, 182, 212, 0.08) !important;
+}
+
+/* ── 테두리: surface 계열 → 연한 회색 ── */
+.theme-light .border-surface-800,
+.theme-light .border-surface-700 {
+  border-color: rgb(210, 220, 235) !important;
+}
+
+/* ── 입력창 ── */
+.theme-light input:not([type=checkbox]):not([type=radio]),
+.theme-light select,
+.theme-light textarea {
+  color: rgb(15, 23, 42) !important;
+  background-color: rgb(248, 250, 253) !important;
+  border-color: rgb(210, 220, 235) !important;
+}
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: rgb(140, 155, 175) !important;
+}
+
+/* ── 테이블 ── */
+.theme-light tr:hover > td {
+  background: rgba(6, 182, 212, 0.06) !important;
+}
+
+/* ── 차트 (recharts) ── */
+.theme-light .recharts-text,
+.theme-light .recharts-label {
+  fill: rgb(50, 65, 90) !important;
+}
+.theme-light .recharts-legend-item-text {
+  color: rgb(50, 65, 90) !important;
+}
+.theme-light .recharts-cartesian-grid-horizontal line,
+.theme-light .recharts-cartesian-grid-vertical line {
+  stroke: rgba(180, 195, 215, 0.6) !important;
+}
+
+/* ── 모달/드롭다운 배경 ── */
+.theme-light .bg-surface-900.rounded-xl,
+.theme-light .bg-surface-900.rounded-2xl {
+  background-color: rgb(255, 255, 255) !important;
+  border-color: rgb(210, 220, 235) !important;
+}
+
+/* ── 아이콘: 밝은 색 → 진하게 ── */
+.theme-light svg.text-white {
+  color: rgb(30, 45, 70) !important;
 }
 
 /* 애니메이션 */
