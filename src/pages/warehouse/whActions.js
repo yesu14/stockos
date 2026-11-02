@@ -5,6 +5,7 @@
 import {
   LIMITS, buildModel, checkZoneRect, REASON_TEXT, round2, normNumber, findBoxByNumber,
   nextBoxNumber, stackAt, locationText, boxesAbove, boxesLostBy, itemKey, checkOfficeSpot, planBoxMove, stackRepairs,
+  checkWarehouseRect, officeInside, snap,
 } from './whLogic'
 
 const soft = msg => Object.assign(new Error(msg), { soft: true })     // 입력 오류: 다시 불러올 필요 없음
@@ -44,9 +45,9 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
   // ── 창고 ──
   const createWarehouse = rect => guard(async () => {
     if (getRaw().warehouse) throw soft('창고는 하나만 만들 수 있어요')
-    const width = Math.round(rect.w), height = Math.round(rect.h)
-    if (width < LIMITS.whMin[0] || height < LIMITS.whMin[1]) throw soft(`창고가 너무 작아요 (최소 ${LIMITS.whMin[0]} × ${LIMITS.whMin[1]})`)
-    if (width > LIMITS.whMax[0] || height > LIMITS.whMax[1]) throw soft(`창고가 너무 커요 (최대 ${LIMITS.whMax[0]} × ${LIMITS.whMax[1]})`)
+    const width = round2(snap(rect.w)), height = round2(snap(rect.h))       // 0.5m 단위로 자유롭게
+    if (width < LIMITS.whMin[0] || height < LIMITS.whMin[1]) throw soft(REASON_TEXT['wh-small'])
+    if (width > LIMITS.whMax[0] || height > LIMITS.whMax[1]) throw soft(REASON_TEXT['wh-big'])
     dispatch({ type: 'wh/set', row: await api.createWarehouse({ name: '내 창고', width, height }) })
     notify.success('창고를 만들었어요 🏭')
   })
@@ -57,9 +58,24 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
     for (const z of m.zones) if (z.x + z.w > width + 1e-6 || z.y + z.h > height + 1e-6) throw soft(`${z.name}이(가) 창고 밖으로 나가요. 먼저 구역을 옮기거나 줄여주세요`)
     const row = await api.updateWarehouse(wh.id, { ...patch, width, height })
     dispatch({ type: 'wh/set', row })
-    for (const f of m.fixtures) if (f.kind === 'office' && (f.x > width - 1.6 || f.y > height - 1.3)) {   // 사무실이 밖으로 나가면 안쪽으로
-      dispatch({ type: 'fx/patch', row: await api.patchFixture(f.id, { x: Math.min(f.x, width - 2), y: Math.min(f.y, height - 2) }) })
+    for (const f of m.fixtures) if (f.kind === 'office') {                                       // 사무실이 밖으로 나가면 안쪽으로
+      const p = officeInside(f, width, height)
+      if (Math.abs(p.x - f.x) > 1e-6 || Math.abs(p.y - f.y) > 1e-6) dispatch({ type: 'fx/patch', row: await api.patchFixture(f.id, p) })
     }
+  })
+  /** 가장자리/모서리를 끌어서 창고 크기를 바꿈. 왼쪽/위를 옮겼다면 구역과 사무실도 같이 옮겨서 제자리에 있게 함 */
+  const resizeWarehouse = rect => guard(async () => {
+    const wh = needWh(), m = model(), chk = checkWarehouseRect(m, rect)
+    if (!chk.ok) throw soft(chk.reason === 'zone-out' ? `${chk.zone}이(가) 창고 밖으로 나가요. 먼저 구역을 옮기거나 줄여주세요` : REASON_TEXT[chk.reason])
+    dispatch({ type: 'wh/set', row: await api.updateWarehouse(wh.id, { width: chk.width, height: chk.height }) })
+    if (Math.abs(chk.dx) > 1e-9 || Math.abs(chk.dy) > 1e-9) {
+      for (const z of m.zones) dispatch({ type: 'zone/patch', row: await api.patchZone(z.id, { x: round2(z.x + chk.dx), y: round2(z.y + chk.dy) }) })
+    }
+    for (const f of m.fixtures) if (f.kind === 'office') {
+      const p = officeInside(f, chk.width, chk.height, chk.dx, chk.dy)
+      if (Math.abs(p.x - f.x) > 1e-6 || Math.abs(p.y - f.y) > 1e-6) dispatch({ type: 'fx/patch', row: await api.patchFixture(f.id, p) })
+    }
+    notify.success(`창고 크기를 바꿨어요 (가로 ${chk.width}m × 세로 ${chk.height}m)`)
   })
   const deleteWarehouse = () => guard(async () => {
     const wh = needWh(), m = model()
@@ -266,7 +282,7 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
   const removeItem = itemId => guard(async () => { await api.removeItem(itemId); dispatch({ type: 'item/remove', id: itemId }) })
 
   return {
-    reload, createWarehouse, updateWarehouse, deleteWarehouse, addFixture, moveFixture, removeFixture,
+    reload, createWarehouse, updateWarehouse, resizeWarehouse, deleteWarehouse, addFixture, moveFixture, removeFixture,
     createZone, moveZone, updateZone, deleteZone, addLine, setLineSlots, deleteLine,
     addBox, renameBox, deleteBox, moveBox, repairStacks, addItems, setQty, removeItem,
   }

@@ -24,6 +24,7 @@ export function friendly(error) {
     return new WhError('DUP', '이미 같은 값이 있어요')
   }
   if (code === '42501' || /row-level security|permission denied/i.test(msg)) return new WhError('DENIED', '수정 권한이 없어요 (관리자/매니저만 수정할 수 있어요)')
+  if (code === '23514' || /violates check constraint/i.test(msg)) return new WhError('CHECK', '값이 허용 범위를 벗어났어요 (창고는 가로 8~150, 세로 6~150 사이)')
   if (code === 'PGRST116') return new WhError('GONE', '대상을 찾지 못했어요 (이미 삭제됐거나 수정 권한이 없어요)')
   return new WhError('DB', msg || '저장하지 못했어요', error)
 }

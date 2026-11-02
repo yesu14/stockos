@@ -63,6 +63,23 @@ export function drawRect(a, b, bounds, step) {
   if (bounds) { x1 = clamp(x1, 0, bounds.w); x2 = clamp(x2, 0, bounds.w); y1 = clamp(y1, 0, bounds.h); y2 = clamp(y2, 0, bounds.h) }
   return normRect(x1, y1, x2, y2)
 }
+/** 구역들이 차지하는 범위 (창고를 이보다 작게 줄일 수 없음) */
+export const zoneExtent = zones => ({ left: Math.min(...zones.map(z => z.x)), top: Math.min(...zones.map(z => z.y)), right: Math.max(...zones.map(z => z.x + z.w)), bottom: Math.max(...zones.map(z => z.y + z.h)) })
+/** 창고 가장자리/모서리(edge: n e s w ne se sw nw)를 (dx, dy)만큼 끌었을 때의 새 범위 {x0,y0,x1,y1}.
+ *  step 단위로 맞추고, 최소/최대 크기를 지키며, 구역이 있는 곳까지는 줄이지 않음 */
+export function resizeBounds(orig, edge, dx, dy, ext, lim, step = 0.5) {
+  const sn = v => Math.round(v / step) * step, cl = (v, a, b) => Math.max(a, Math.min(b, v))      // 범위가 뒤집히면 앞(a)이 이김
+  let { x0, y0, x1, y1 } = orig
+  if (edge.includes('w')) x0 = sn(orig.x0 + dx)
+  if (edge.includes('e')) x1 = sn(orig.x1 + dx)
+  if (edge.includes('n')) y0 = sn(orig.y0 + dy)
+  if (edge.includes('s')) y1 = sn(orig.y1 + dy)
+  if (edge.includes('e')) x1 = cl(x1, Math.max(x0 + lim.minW, ext ? ext.right : -Infinity), x0 + lim.maxW)
+  if (edge.includes('w')) x0 = cl(x0, x1 - lim.maxW, Math.min(x1 - lim.minW, ext ? ext.left : Infinity))
+  if (edge.includes('s')) y1 = cl(y1, Math.max(y0 + lim.minH, ext ? ext.bottom : -Infinity), y0 + lim.maxH)
+  if (edge.includes('n')) y0 = cl(y0, y1 - lim.maxH, Math.min(y1 - lim.minH, ext ? ext.top : Infinity))
+  return { x0, y0, x1, y1 }
+}
 /** (월드 좌표) 점이 들어 있는 구역 */
 export const zoneAt = (zones, wx, wy) => zones.find(z => wx >= z.x && wx <= z.x + z.w && wy >= z.y && wy <= z.y + z.h) || null
 /** 구역 안에서 (월드 좌표) 어느 줄/칸인지 */

@@ -9,8 +9,8 @@ import { useAuth } from '../../context/AuthContext'
 import SkuThumb from '../../components/ui/SkuThumb'
 import api from './whApi'
 import { makeActions } from './whActions'
-import { buildModel, emptyRaw, rawReducer, searchAll, locationText, LIMITS, stackRepairs } from './whLogic'
-import { Btn, Modal, Field, Stepper, inputCls, useAsk, usePrompt, EmptyNote, StockBadge } from './ui'
+import { buildModel, emptyRaw, rawReducer, searchAll, locationText, LIMITS, stackRepairs, round2 } from './whLogic'
+import { Btn, Modal, Field, inputCls, useAsk, usePrompt, EmptyNote, StockBadge } from './ui'
 import FloorPlan from './FloorPlan'
 import Scene3D from './Scene3D'
 import ZoneDialog from './ZoneDialog'
@@ -23,17 +23,20 @@ import MoveBoxDialog from './MoveBoxDialog'
 const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
 function WarehouseDialog({ wh, onSubmit, onClose }) {
-  const [name, setName] = useState(wh.name), [w, setW] = useState(wh.width), [h, setH] = useState(wh.height), [busy, setBusy] = useState(false)
+  const [name, setName] = useState(wh.name), [w, setW] = useState(String(wh.width)), [h, setH] = useState(String(wh.height)), [busy, setBusy] = useState(false)
+  const nw = Number(w), nh = Number(h)
+  const ok = w !== '' && h !== '' && nw >= LIMITS.whMin[0] && nw <= LIMITS.whMax[0] && nh >= LIMITS.whMin[1] && nh <= LIMITS.whMax[1]
   return (
-    <Modal onClose={onClose} icon="🏭" title="창고 설정" subtitle="크기는 칸 단위예요 (구역·박스 크기의 기준)"
-      footer={<><Btn variant="soft" onClick={onClose}>취소</Btn><Btn variant="primary" disabled={busy} onClick={async () => { setBusy(true); try { await onSubmit({ name: name.trim() || '내 창고', width: Number(w), height: Number(h) }) } finally { setBusy(false) } }}>저장</Btn></>}>
+    <Modal onClose={onClose} icon="🏭" title="창고 설정" subtitle="가로·세로를 자유롭게 정해요 (단위: m)"
+      footer={<><Btn variant="soft" onClick={onClose}>취소</Btn><Btn variant="primary" disabled={busy || !ok} onClick={async () => { setBusy(true); try { await onSubmit({ name: name.trim() || '내 창고', width: round2(nw), height: round2(nh) }) } finally { setBusy(false) } }}>저장</Btn></>}>
       <div className="space-y-4">
         <Field label="창고 이름"><input value={name} onChange={e => setName(e.target.value)} maxLength={30} className={inputCls} /></Field>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="가로 (칸)"><Stepper value={w} min={LIMITS.whMin[0]} max={LIMITS.whMax[0]} onChange={setW} /></Field>
-          <Field label="세로 (칸)"><Stepper value={h} min={LIMITS.whMin[1]} max={LIMITS.whMax[1]} onChange={setH} /></Field>
+          <Field label="가로 (m)" hint={`${LIMITS.whMin[0]} ~ ${LIMITS.whMax[0]}`}><input type="number" inputMode="decimal" step="0.5" min={LIMITS.whMin[0]} max={LIMITS.whMax[0]} value={w} onChange={e => setW(e.target.value)} className={inputCls} /></Field>
+          <Field label="세로 (m)" hint={`${LIMITS.whMin[1]} ~ ${LIMITS.whMax[1]}`}><input type="number" inputMode="decimal" step="0.5" min={LIMITS.whMin[1]} max={LIMITS.whMax[1]} value={h} onChange={e => setH(e.target.value)} className={inputCls} /></Field>
         </div>
-        <p className="text-[11px] text-surface-500 leading-relaxed">평면도에서 선택한 창고의 오른쪽 아래 노란 점을 끌어도 크기를 바꿀 수 있어요. 구역이 있는 곳까지는 줄일 수 없어요.</p>
+        {!ok && <p className="text-[11px] text-red-400">가로 {LIMITS.whMin[0]}~{LIMITS.whMax[0]}m, 세로 {LIMITS.whMin[1]}~{LIMITS.whMax[1]}m 사이로 넣어주세요.</p>}
+        <p className="text-[11px] text-surface-500 leading-relaxed">평면도에서 <b>창고 크기</b> 버튼을 누르면 테두리의 노란 점(모서리 4개·가장자리 4개)을 끌어서 바로 바꿀 수 있어요. 왼쪽/위쪽을 끌면 구역은 제자리에 그대로 있어요. 구역이 있는 곳까지는 줄일 수 없어요.</p>
       </div>
     </Modal>
   )
@@ -165,7 +168,7 @@ export default function WarehousePage() {
     moveZone: actions.moveZone, deleteZone: actions.deleteZone, requestCreateZone: rect => setZoneForm({ mode: 'create', rect }),
     openZone: (id, line) => setZoneDetail({ id, line: line ?? 0 }), editZone: id => setZoneForm({ mode: 'edit', id }),
     addFixture: actions.addFixture, moveFixture: actions.moveFixture, removeFixture: actions.removeFixture,
-    openBox: id => setBoxId(id), moveBox: actions.moveBox,
+    openBox: id => setBoxId(id), moveBox: actions.moveBox, resizeWarehouse: actions.resizeWarehouse,
   }), [actions])
 
   const submitZone = async form => {

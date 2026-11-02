@@ -108,6 +108,9 @@ export const REASON_TEXT = {
   'office-on-zone': '구역과 겹치지 않는 곳에 놓아주세요',
   'office-on-office': '다른 사무실과 겹쳐요',
   'no-warehouse': '먼저 창고를 그려주세요',
+  'wh-small': `창고가 너무 작아요 (최소 ${LIMITS.whMin[0]} × ${LIMITS.whMin[1]} m)`,
+  'wh-big': `창고가 너무 커요 (최대 ${LIMITS.whMax[0]} × ${LIMITS.whMax[1]} m)`,
+  'zone-out': '구역이 창고 밖으로 나가요. 먼저 구역을 옮기거나 줄여주세요',
 }
 
 // ── 시설물(창문/출입구/사무실) ───────────────────────────────
@@ -248,6 +251,23 @@ export function boxesLostBy(zone, { tiers, lineCount, slotCount }) {
   })
   return lost
 }
+
+// ═══════════════════════════════════════════════════════════
+//  창고 크기 바꾸기: 가장자리/모서리를 끌어서 가로·세로를 자유롭게 (왼쪽/위를 옮기면 구역도 같이 따라가서 제자리에 있음)
+//  rect = { x0, y0, x1, y1 } : 지금 좌표(창고 왼쪽 위 = 0, 0)에서 본 새 창고 범위
+// ═══════════════════════════════════════════════════════════
+export function checkWarehouseRect(model, rect) {
+  const w = rect.x1 - rect.x0, h = rect.y1 - rect.y0, eps = 1e-6
+  if (w < LIMITS.whMin[0] - eps || h < LIMITS.whMin[1] - eps) return { ok: false, reason: 'wh-small' }
+  if (w > LIMITS.whMax[0] + eps || h > LIMITS.whMax[1] + eps) return { ok: false, reason: 'wh-big' }
+  for (const z of model.zones) if (z.x < rect.x0 - eps || z.y < rect.y0 - eps || z.x + z.w > rect.x1 + eps || z.y + z.h > rect.y1 + eps) return { ok: false, reason: 'zone-out', zone: z.name }
+  return { ok: true, width: round2(w), height: round2(h), dx: round2(-rect.x0) + 0, dy: round2(-rect.y0) + 0 }      // + 0 : -0 을 0 으로
+}
+/** 사무실이 창고 밖으로 나가지 않게 안쪽으로 (옮긴 만큼 dx, dy 를 더한 뒤) */
+export const officeInside = (f, W, H, dx = 0, dy = 0) => ({
+  x: round2(clamp((f.x ?? 0) + dx, OFFICE_W / 2 + 0.2, W - OFFICE_W / 2 - 0.2)),
+  y: round2(clamp((f.y ?? 0) + dy, OFFICE_H / 2 + 0.2, H - OFFICE_H / 2 - 0.2)),
+})
 
 // ═══════════════════════════════════════════════════════════
 //  박스 옮기기 (다른 칸 / 다른 줄 / 다른 구역)
