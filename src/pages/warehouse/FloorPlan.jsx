@@ -244,6 +244,10 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
     }
     anim.current = requestAnimationFrame(step)
   }, [setView])
+  // 탭으로 창을 열 때: 손을 뗀 순간이 아니라 click 이벤트 때 열기 (폰은 손을 뗀 직후 같은 자리에 클릭이 한 번 더 와서, 방금 열린 창의 배경을 눌러 닫아버림)
+  const pendingTap = useRef(null)
+  const deferTap = fn => { clearTimeout(pendingTap.current?.timer); const t = { fn, timer: setTimeout(() => { if (pendingTap.current === t) { pendingTap.current = null; fn() } }, 400) }; pendingTap.current = t }
+  const onSvgClick = () => { const t = pendingTap.current; if (!t) return; clearTimeout(t.timer); pendingTap.current = null; t.fn() }
   // 창고 크기가 바뀌어서(끌어서든 설정 창에서든) 모서리가 화면 밖으로 나갔으면 전체가 보이게 다시 맞춤
   const lastWh = useRef(null)
   useEffect(() => {
@@ -279,6 +283,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
 
   const onPointerDown = e => {
     if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
+    if (pendingTap.current) { clearTimeout(pendingTap.current.timer); pendingTap.current = null }
     svgRef.current.setPointerCapture?.(e.pointerId)
     const p = local(e); pts.current.set(e.pointerId, p)
     if (pts.current.size === 2) {                                            // 두 손가락: 확대/이동
@@ -392,7 +397,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
         if (!g.moved) { if (g.hit === 'wh' && wh) select({ type: 'wh', id: wh.id }); else select(null) }
         break
       case 'tap-box': case 'drag-box': {
-        if (!g.moved) { actions.openBox(g.id); break }                                        // 그냥 눌렀으면 박스 열기
+        if (!g.moved) { deferTap(() => actions.openBox(g.id)); break }                                        // 그냥 눌렀으면 박스 열기
         const l = g.last
         if (l?.plan?.ok) actions.moveBox(g.id, { zoneId: l.cell.zone.id, lineId: l.cell.line.id, slot: l.cell.slot })
         else if (l?.plan) onNotify?.(l.plan.text)
@@ -400,7 +405,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
       }
       case 'tap-zone': case 'drag-zone': {
         if (g.moved && g.last) { if (g.last.ok) actions.moveZone(g.id, g.last.rect); else onNotify?.(REASON_TEXT[g.last.reason] || '여기에는 놓을 수 없어요') }
-        else if (!g.moved && g.wasSel) { const z = model.zonesById.get(g.id); const c = z && M.cellAt(z, w[0], w[1]); actions.openZone(g.id, c?.lineIdx) }
+        else if (!g.moved && g.wasSel) { const z = model.zonesById.get(g.id), c = z && M.cellAt(z, w[0], w[1]); deferTap(() => actions.openZone(g.id, c?.lineIdx)) }
         break
       }
       case 'resize-zone': if (g.last) { if (g.last.ok) actions.moveZone(g.id, g.last.rect); else onNotify?.(REASON_TEXT[g.last.reason] || '그 크기로는 바꿀 수 없어요') } break
@@ -460,7 +465,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
       <div ref={boxRef} className="relative flex-1 min-h-[300px] rounded-[28px] overflow-hidden border border-surface-700" style={{ background: css('--surface-950') }}>
         <svg ref={svgRef} data-testid="plan-svg" width={size.w} height={size.h} className="absolute inset-0 touch-none select-none"
           style={{ cursor: tool === 'select' ? 'grab' : 'crosshair' }}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finish(e, false)} onPointerCancel={e => finish(e, true)}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finish(e, false)} onClick={onSvgClick} onPointerCancel={e => finish(e, true)}
           onContextMenu={e => e.preventDefault()}>
           <defs>
             <pattern id="wh-dots" width="1" height="1" patternUnits="userSpaceOnUse"><circle cx="0.5" cy="0.5" r="0.045" style={{ fill: css('--surface-400'), opacity: 0.5 }} /></pattern>

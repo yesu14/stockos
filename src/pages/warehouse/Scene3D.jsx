@@ -27,7 +27,7 @@ function lerpCam(a, b, e) {
 }
 const TWO_PI = Math.PI * 2
 
-export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone }) {
+export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onSwitch }) {
   const wh = model.warehouse
   const { ref: frameRef, full, toggle } = useFullscreen()
   const boxRef = useRef(null), canvasRef = useRef(null)
@@ -135,6 +135,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
     boxRef.current.setPointerCapture?.(e.pointerId)
     boxRef.current.focus?.({ preventScroll: true })                      // 방향키로 움직일 수 있게
     const p = local(e); pointers.current.set(e.pointerId, p); tween.current = null
+    if (tapRef.current) { clearTimeout(tapRef.current.timer); tapRef.current = null }
     if (pointers.current.size === 2) { const [a, b] = [...pointers.current.values()]; gesture.current = { type: 'pinch', a0: a, b0: b, cam0: cam.current }; return }
     if (pointers.current.size === 1) gesture.current = { type: e.shiftKey || e.ctrlKey || e.button === 2 || e.button === 1 || panMode ? 'pan' : 'rotate', start: p, last: p, moved: false }
   }
@@ -156,16 +157,20 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
     cam.current = g.type === 'pan' ? panGround(cam.current, dx, dy) : rotateCamera(cam.current, dx * 0.008, dy * 0.006)
     setTopView(cam.current.pitch > PITCH_MAX - 0.05); dirty.current = true
   }
+  const tapRef = useRef(null)
+  const fireTap = () => {
+    const t = tapRef.current; if (!t) return; tapRef.current = null; clearTimeout(t.timer)
+    if (!scene.current) return
+    const hit = hitTest(scene.current, t.p[0], t.p[1])
+    if (hit?.type === 'box') onPickBox?.(hit.id); else if (hit?.type === 'zone') onPickZone?.(hit.id)
+  }
   const onPointerUp = e => {
     const had = pointers.current.has(e.pointerId); pointers.current.delete(e.pointerId)
     const g = gesture.current
     if (g?.type === 'pinch') { if (pointers.current.size < 2) gesture.current = null; return }
     if (!had || !g) return
     gesture.current = null
-    if (!g.moved && scene.current) {
-      const [x, y] = local(e), hit = hitTest(scene.current, x, y)
-      if (hit?.type === 'box') onPickBox?.(hit.id); else if (hit?.type === 'zone') onPickZone?.(hit.id)
-    }
+    if (!g.moved && scene.current) { clearTimeout(tapRef.current?.timer); tapRef.current = { p: local(e), timer: setTimeout(() => fireTap(), 400) } }      // 창은 click 이벤트 때 열기 (폰 고스트 클릭 방지)
   }
   const onPointerCancel = e => { pointers.current.delete(e.pointerId); gesture.current = null }
 
@@ -189,13 +194,14 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
   return (
     <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col gap-2'}>
       <div className="flex items-center gap-2 shrink-0">
-        <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고</h2>
+        <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고 <span className="text-[10px] font-normal text-surface-400">(예전 방식)</span></h2>
         <div className="flex-1" />
+        {onSwitch && <Btn size="sm" variant="soft" onClick={onSwitch}>새 3D로 보기</Btn>}
         {full && <Btn size="sm" variant="soft" onClick={toggle}>닫기 ✕</Btn>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown} className={`relative rounded-[28px] overflow-hidden border border-surface-700 touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 ${full ? 'flex-1 min-h-0' : 'h-[300px] sm:h-[340px]'}`}
         style={{ background: 'rgb(var(--surface-950))', cursor: 'grab' }}
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onContextMenu={e => e.preventDefault()}>
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={e => { if (e.target.closest('[data-ctl]')) return; fireTap() }} onPointerCancel={onPointerCancel} onContextMenu={e => e.preventDefault()}>
         <canvas ref={canvasRef} data-testid="scene3d-canvas" width={Math.round(size.w * dpr)} height={Math.round(size.h * dpr)} style={{ width: size.w, height: size.h }} className="absolute inset-0" />
         {!wh && (
           <div className="absolute inset-0 flex items-center justify-center p-6 text-center pointer-events-none">
