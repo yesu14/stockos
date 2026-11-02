@@ -1,11 +1,14 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import {
-  Plus, ChevronDown, ChevronRight, Trash2, Edit2, X, Save,
-  Search, Package, Calendar, ArrowLeft, CheckSquare, Square
+  Plus, ChevronDown, ChevronRight, Trash2, X, Save,
+  Search, Package, Calendar, ArrowLeft
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
+import { adjustStock } from '../../lib/stock'
 
 // ── 체크박스 (indeterminate 지원) ─────────────────────────
 function Chk({ state, onChange }) {
@@ -117,6 +120,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                   const curSale = sku.currentSaleQty || 0
                   return (
                     <td key={v2.option_value} className="px-2 py-2">
+                      <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                       <div className="text-center text-xs text-surface-500 mb-0.5">재고 {sku.stock}</div>
                       {curSale > 0 && <div className="text-center text-xs text-primary-400 mb-0.5">기존판매 {curSale}</div>}
                       <input type="number" min="0" value={val}
@@ -131,6 +135,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                   const curSale = sku.currentSaleQty || 0
                   return (
                     <td key="single" className="px-2 py-2">
+                      <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                       <div className="text-center text-xs text-surface-500 mb-0.5">재고 {sku.stock}</div>
                       {curSale > 0 && <div className="text-center text-xs text-primary-400 mb-0.5">기존판매 {curSale}</div>}
                       <input type="number" min="0" value={val}
@@ -174,10 +179,10 @@ function SaleAddPage({ onClose, onSaved, currentUser }) {
   async function loadBase() {
     setLoading(true)
     const [{ data: cats }, { data: prods }, { data: skus }, { data: saleDates }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, sale_price, margin, category_id').eq('is_active', true).order('sort_order'),
-      supabase.from('product_skus').select('id, stock, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true),
-      supabase.from('sales').select('sale_date').eq('created_by', currentUser.id)
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, sale_price, margin, category_id').eq('is_active', true).order('sort_order')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true)),
+      selectAll(() => supabase.from('sales').select('sale_date').eq('created_by', currentUser.id))
     ])
     setCategories(cats || [])
     setProducts(prods || [])
@@ -190,10 +195,10 @@ function SaleAddPage({ onClose, onSaved, currentUser }) {
   }
 
   async function loadDateSales() {
-    const { data } = await supabase.from('sales')
+    const { data } = await selectAll(() => supabase.from('sales')
       .select('id, quantity, product_sku_id')
       .eq('sale_date', saleDate)
-      .eq('created_by', currentUser.id)
+      .eq('created_by', currentUser.id))
     const map = {}
     ;(data || []).forEach(s => { map[s.product_sku_id] = s })
     setSaleDateSales(map)
@@ -305,13 +310,15 @@ function SaleAddPage({ onClose, onSaved, currentUser }) {
         const margin = freshSku?.products?.margin || item.product?.margin || 0
         const existingForDate = saleDateSales[item.sku.id]
         if (existingForDate) {
-          // Update existing record for this date
+          // 이 날짜의 기존 기록 수정: 늘어난/줄어든 수량만큼만 재고를 안전하게 바꿈
           const diff = item.qty - existingForDate.quantity
-          await supabase.from('sales').update({ quantity: item.qty, updated_at: new Date().toISOString() }).eq('id', existingForDate.id)
-          await supabase.from('product_skus').update({ stock: (freshSku?.stock || 0) - diff }).eq('id', item.sku.id)
+          if (diff !== 0) await adjustStock(item.sku.id, -diff)
+          const { error: sErr } = await supabase.from('sales').update({ quantity: item.qty, updated_at: new Date().toISOString() }).eq('id', existingForDate.id)
+          if (sErr) { if (diff !== 0) await adjustStock(item.sku.id, diff, { allowNegative: true }); throw sErr }
         } else {
-          await supabase.from('sales').insert({ product_sku_id: item.sku.id, quantity: item.qty, sale_price: salePrice, margin, sale_date: saleDate, created_by: currentUser.id })
-          await supabase.from('product_skus').update({ stock: (freshSku?.stock || 0) - item.qty }).eq('id', item.sku.id)
+          await adjustStock(item.sku.id, -item.qty)      // 재고 먼저 (모자라면 여기서 멈춤)
+          const { error: sErr } = await supabase.from('sales').insert({ product_sku_id: item.sku.id, quantity: item.qty, sale_price: salePrice, margin, sale_date: saleDate, created_by: currentUser.id })
+          if (sErr) { await adjustStock(item.sku.id, item.qty, { allowNegative: true }); throw sErr }
         }
       }
       toast.success('판매 저장 완료')
@@ -393,6 +400,7 @@ function SaleAddPage({ onClose, onSaved, currentUser }) {
                           return (
                             <div key={sku.id} className={'flex items-center gap-2 pl-12 pr-3 py-1.5 border-t border-surface-800/20 ' + (alreadyIn ? 'opacity-50' : '')}>
                               <Chk state={alreadyIn ? false : !!checked[sku.id]} onChange={() => toggleSku(sku.id)} />
+                              <SkuThumb url={sku.image_url} size={30} />
                               <span className="flex-1 text-xs text-surface-300">{skuLabel(sku)}</span>
                               {hasSale && <span className="text-xs text-primary-400/70">판매{saleDateSales[sku.id].quantity}</span>}
                               <span className="text-xs text-surface-500 font-mono">재고 {sku.stock}</span>
@@ -423,6 +431,7 @@ function SaleAddPage({ onClose, onSaved, currentUser }) {
               <div className="space-y-2">
                 {saleItems.map((item, idx) => (
                   <div key={item.sku.id} className="flex items-center gap-2 bg-surface-800/40 rounded-xl px-3 py-2.5">
+                    <SkuThumb url={item.sku.image_url} size={38} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white truncate">{item.product.name}</p>
                       <p className="text-xs text-surface-400">{skuLabel(item.sku)}</p>
@@ -494,16 +503,17 @@ export default function SalesRecordsPage() {
 
   async function loadAll() {
     setLoading(true)
-    const { data } = await supabase.from('sales')
+    const { data } = await selectAll(() => supabase.from('sales')
       .select(`id, quantity, sale_price, margin, sale_date, product_sku_id, created_at,
         product_skus(
+          image_url,
           products(id, name, category_id, categories(name)),
           o1:option1_id(option_value),
           o2:option2_id(option_value)
         )`)
       .eq('created_by', user.id)
       .order('sale_date', { ascending: false })
-      .order('created_at', { ascending: false })
+      .order('created_at', { ascending: false }))
     setSales(data || [])
     setLoading(false)
   }
@@ -512,9 +522,9 @@ export default function SalesRecordsPage() {
     const sale = sales.find(s => s.id === saleId)
     if (!sale || !confirm('삭제 시 재고가 복구됩니다. 계속하시겠습니까?')) return
     try {
-      const { data: sku } = await supabase.from('product_skus').select('stock').eq('id', sale.product_sku_id).single()
-      await supabase.from('product_skus').update({ stock: (sku?.stock || 0) + sale.quantity }).eq('id', sale.product_sku_id)
-      await supabase.from('sales').delete().eq('id', saleId)
+      await adjustStock(sale.product_sku_id, sale.quantity, { allowNegative: true })      // 재고 복구
+      const { error } = await supabase.from('sales').delete().eq('id', saleId)
+      if (error) { await adjustStock(sale.product_sku_id, -sale.quantity, { allowNegative: true }); throw error }
       toast.success('삭제 완료'); loadAll()
     } catch(err) { toast.error(err.message) }
   }
@@ -525,9 +535,9 @@ export default function SalesRecordsPage() {
       for (const id of ids) {
         const sale = sales.find(s => s.id === id)
         if (!sale) continue
-        const { data: sku } = await supabase.from('product_skus').select('stock').eq('id', sale.product_sku_id).single()
-        await supabase.from('product_skus').update({ stock: (sku?.stock || 0) + sale.quantity }).eq('id', sale.product_sku_id)
-        await supabase.from('sales').delete().eq('id', id)
+        await adjustStock(sale.product_sku_id, sale.quantity, { allowNegative: true })
+        const { error } = await supabase.from('sales').delete().eq('id', id)
+        if (error) { await adjustStock(sale.product_sku_id, -sale.quantity, { allowNegative: true }); throw error }
       }
       toast.success(`${ids.length}개 삭제 완료`); setChecked({}); loadAll()
     } catch(err) { toast.error(err.message) }
@@ -536,9 +546,9 @@ export default function SalesRecordsPage() {
   async function updateSaleQty(sale, newQty) {
     const diff = newQty - sale.quantity
     try {
-      await supabase.from('sales').update({ quantity: newQty, updated_at: new Date().toISOString() }).eq('id', sale.id)
-      const { data: sku } = await supabase.from('product_skus').select('stock').eq('id', sale.product_sku_id).single()
-      await supabase.from('product_skus').update({ stock: (sku?.stock || 0) - diff }).eq('id', sale.product_sku_id)
+      if (diff !== 0) await adjustStock(sale.product_sku_id, -diff)
+      const { error } = await supabase.from('sales').update({ quantity: newQty, updated_at: new Date().toISOString() }).eq('id', sale.id)
+      if (error) { if (diff !== 0) await adjustStock(sale.product_sku_id, diff, { allowNegative: true }); throw error }
       toast.success('수정 완료'); setEditSale(null); loadAll()
     } catch(err) { toast.error(err.message) }
   }
@@ -726,7 +736,7 @@ export default function SalesRecordsPage() {
                                     </td>
                                     <td className="px-4 py-2">
                                       <div className="flex items-center gap-2 pl-20">
-                                        <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />
+                                        <SkuThumb url={sale.product_skus?.image_url} size={28} />
                                         <span className="text-xs text-surface-400">{skuLabel(sale)}</span>
                                       </div>
                                     </td>

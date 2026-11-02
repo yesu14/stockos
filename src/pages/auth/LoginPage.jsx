@@ -1,13 +1,11 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../context/AuthContext'
 import { Boxes, Eye, EyeOff, Monitor, Clock, X, KeyRound, Mail } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../../lib/supabase'
 
 export default function LoginPage() {
-  const { t } = useTranslation()
   const { login } = useAuth()
   const navigate = useNavigate()
 
@@ -68,9 +66,6 @@ export default function LoginPage() {
       // 해당 유저 존재 확인
       const { data: prof } = await supabase.from('profiles').select('id, email').eq('email', forgotEmail).single()
       if (!prof) { toast.error('해당 이메일로 가입된 계정이 없습니다'); setForgotLoading(false); return }
-
-      // 랜덤 비밀번호 생성
-      const randomPw = Math.random().toString(36).slice(2, 8).toUpperCase() + Math.random().toString(36).slice(2, 6)
 
       // Supabase Admin API로 비밀번호 변경 (Edge Function 없이 reset email 사용)
       // 실제 환경에서는 Edge Function 필요. 여기서는 Supabase 기본 reset email 사용

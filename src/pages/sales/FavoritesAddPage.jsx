@@ -4,6 +4,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { ChevronLeft, Search, Star, ChevronDown, ChevronRight } from 'lucide-react'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
 
 export default function FavoritesAddPage() {
   const navigate = useNavigate()
@@ -25,10 +27,10 @@ export default function FavoritesAddPage() {
   async function loadData() {
     setLoading(true)
     const [{ data: cats }, { data: prods }, { data: skus }, { data: favData }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, category_id').eq('is_active', true).order('name'),
-      supabase.from('product_skus').select('id, stock, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true),
-      supabase.from('favorites').select('product_sku_id').eq('user_id', user.id)
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, category_id').eq('is_active', true).order('name')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true)),
+      selectAll(() => supabase.from('favorites').select('product_sku_id').eq('user_id', user.id))
     ])
     setCategories(cats || [])
     setProducts(prods || [])
@@ -201,6 +203,7 @@ export default function FavoritesAddPage() {
                             <input type="checkbox" checked={isExisting || !!selected[sku.id]} disabled={isExisting}
                               onChange={() => toggleSku(sku.id)}
                               className="w-4 h-4 accent-amber-500 cursor-pointer shrink-0" />
+                            <SkuThumb url={sku.image_url} size={32} />
                             <span className={'flex-1 text-sm ' + (isExisting ? 'text-amber-400/70' : 'text-surface-300')}>{label}</span>
                             <span className={'w-16 text-center text-sm font-mono ' + (sku.stock > 0 ? 'text-emerald-400' : 'text-red-400')}>{sku.stock}</span>
                             {/* 별표 즉시 추가/제거 버튼 */}

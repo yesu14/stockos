@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { ChevronLeft, Search, Filter } from 'lucide-react'
+import { ChevronLeft, Search } from 'lucide-react'
+import SkuThumb from '../../components/ui/SkuThumb'
 
 const TYPE_LABELS = {
   manual: '수동조정',
@@ -35,6 +36,7 @@ export default function StockLogsPage() {
         id, quantity_before, quantity_after, quantity_change,
         option_label, user_name, created_at, change_type, note,
         product_skus(
+          image_url,
           products(name),
           o1:option1_id(option_value),
           o2:option2_id(option_value)
@@ -126,7 +128,7 @@ export default function StockLogsPage() {
                 return (
                   <tr key={log.id} className="hover:bg-surface-800/20 transition-colors">
                     <td className="px-4 py-3 text-surface-100 font-medium">{getProductName(log)}</td>
-                    <td className="px-4 py-3 text-surface-400">{getOptionLabel(log)}</td>
+                    <td className="px-4 py-3 text-surface-400"><div className="flex items-center gap-2"><SkuThumb url={log.product_skus?.image_url} size={28} />{getOptionLabel(log)}</div></td>
                     <td className="px-4 py-3 text-center">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
                     </td>

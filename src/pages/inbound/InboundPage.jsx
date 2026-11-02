@@ -3,15 +3,12 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import {
   PackageCheck, Package, Search, ChevronDown, ChevronRight,
-  X, Trash2, Plus, Save, Pencil, Truck, Download, RefreshCw
+  X, Trash2, Plus, Save, Pencil, Truck, Download
 } from 'lucide-react'
-import {
-  LineChart, Line, BarChart, Bar, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend
-} from 'recharts'
-import ExcelJS from 'exceljs'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll, selectIn } from '../../lib/fetchAll'
+import { applyStockChanges, netStockChanges } from '../../lib/stock'
 
 function skuLabel(sku) {
   return [sku?.o1?.option_value, sku?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
@@ -104,6 +101,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                     const val = values[sku.id] ?? ''
                     return (
                       <td key={v2.option_value} className="px-2 py-2">
+                        <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                         <div className="text-center text-xs text-surface-500 mb-1">재고 {sku.stock}</div>
                         <input type="number" min="0" value={val} onChange={e => onChange(sku.id, e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
                           className={'w-full text-center bg-surface-800 border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none ' + (val > 0 ? 'border-primary-500 bg-primary-500/10' : 'border-surface-700')} />
@@ -115,6 +113,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                     const val = values[sku.id] ?? ''
                     return (
                       <td key="single" className="px-2 py-2">
+                        <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                         <div className="text-center text-xs text-surface-500 mb-1">재고 {sku.stock}</div>
                         <input type="number" min="0" value={val} onChange={e => onChange(sku.id, e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
                           className={'w-full text-center bg-surface-800 border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none ' + (val > 0 ? 'border-primary-500 bg-primary-500/10' : 'border-surface-700')} />
@@ -253,6 +252,7 @@ function InboundItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, prod
                       return (
                         <div key={item.sku.id} className="flex items-center gap-2 pl-12 pr-3 py-2 border-t border-surface-800/20 hover:bg-surface-800/5">
                           <Chk state={!!checked[item.sku.id]} onChange={() => setChecked(p => ({ ...p, [item.sku.id]: !p[item.sku.id] }))} />
+                          <SkuThumb url={item.sku.image_url} size={30} />
                           <span className="flex-1 text-xs text-surface-300">{skuLabel(item.sku)}</span>
                           <span className="w-14 text-center text-xs font-mono text-surface-400">{item.currentStock}</span>
                           <div className="w-24 relative">
@@ -407,6 +407,7 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
                       return (
                         <div key={sku.id} className={'flex items-center gap-2 pl-12 pr-3 py-1.5 border-t border-surface-800/20 ' + (alreadyIn ? 'opacity-40' : '')}>
                           <Chk state={alreadyIn ? false : !!checked[sku.id]} onChange={() => toggleSku(sku.id)} />
+                          <SkuThumb url={sku.image_url} size={30} />
                           <span className="flex-1 text-xs text-surface-300">{skuLabel(sku)}</span>
                           <span className="text-xs text-surface-500 font-mono">재고 {sku.stock}</span>
                           {alreadyIn && <span className="text-xs text-primary-400/70">추가됨</span>}
@@ -530,10 +531,16 @@ function NewInbound({ categories, products, skusByProduct, onDone }) {
       }).select().single()
       if (oErr) throw oErr
       await supabase.from('inbound_orders').update({ total_quantity: totalQty }).eq('id', order.id)
-      for (const item of items) {
-        await supabase.from('inbound_items').insert({ inbound_order_id: order.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: item.finalStock })
-        await supabase.from('product_skus').update({ stock: item.finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
-        await supabase.from('stock_logs').insert({ product_sku_id: item.sku.id, change_type: 'inbound', quantity_before: item.currentStock, quantity_change: item.addQty, quantity_after: item.finalStock, option_label: skuLabel(item.sku), user_name: user?.email || '', created_by: user.id, note: '입고 ' + orderNumber })
+      // 재고는 "지금 DB 값" 기준으로 안전하게 늘림 (화면에 불러둔 옛 값으로 덮어쓰지 않음). 하나라도 실패하면 이미 늘린 것도 되돌림
+      let stockRes
+      try { stockRes = await applyStockChanges(items.map(it => ({ skuId: it.sku.id, delta: it.addQty }))) }
+      catch (e) { await supabase.from('inbound_orders').delete().eq('id', order.id); throw e }
+      try {
+        await supabase.from('inbound_items').insert(items.map((item, i) => ({ inbound_order_id: order.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: stockRes[i].after })))
+        await supabase.from('stock_logs').insert(items.map((item, i) => ({ product_sku_id: item.sku.id, change_type: 'inbound', quantity_before: stockRes[i].before, quantity_change: item.addQty, quantity_after: stockRes[i].after, option_label: skuLabel(item.sku), user_name: user?.email || '', created_by: user.id, note: '입고 ' + orderNumber })))
+      } catch (e) {
+        await applyStockChanges(items.map(it => ({ skuId: it.sku.id, delta: -it.addQty })), { allowNegative: true }).catch(() => {})
+        await supabase.from('inbound_orders').delete().eq('id', order.id); throw e
       }
       toast.success('입고 완료! ' + orderNumber); onDone()
     } catch (err) { toast.error(err.message) }
@@ -592,7 +599,7 @@ function EditInbound({ categories, products, skusByProduct }) {
   async function loadOrders() {
     setLoading(true)
     const { data } = await supabase.from('inbound_orders')
-      .select('id, order_number, inbound_date, total_quantity, truck_type, box_count, tax_paid, goods_amount, bl_number, note, created_at, inbound_items(quantity, product_sku_id, product_skus(products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
+      .select('id, order_number, inbound_date, total_quantity, truck_type, box_count, tax_paid, goods_amount, bl_number, note, created_at, inbound_items(quantity, product_sku_id, product_skus(image_url, products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
       .eq('order_type', 'inbound')
       .order('inbound_date', { ascending: false }).order('created_at', { ascending: false })
       .limit(300)
@@ -611,14 +618,14 @@ function EditInbound({ categories, products, skusByProduct }) {
       goodsAmount: order.goods_amount || '',
       note: order.note || ''
     })
-    const { data } = await supabase.from('inbound_items')
-      .select('id, quantity, final_stock, product_sku_id, product_skus(stock, products(id, name, category_id), o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
-      .eq('inbound_order_id', order.id)
+    const { data } = await selectAll(() => supabase.from('inbound_items')
+      .select('id, quantity, final_stock, product_sku_id, product_skus(image_url, stock, products(id, name, category_id), o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
+      .eq('inbound_order_id', order.id))
     setOrderItems((data || []).map(it => ({
       id: it.id, product: it.product_skus?.products || {},
       catId: it.product_skus?.products?.category_id || '__none__',
-      sku: { id: it.product_sku_id, stock: it.product_skus?.stock || 0, o1: it.product_skus?.o1, o2: it.product_skus?.o2 },
-      currentStock: it.product_skus?.stock || 0, addQty: it.quantity || 0, finalStock: it.final_stock || 0
+      sku: { id: it.product_sku_id, stock: it.product_skus?.stock || 0, image_url: it.product_skus?.image_url, o1: it.product_skus?.o1, o2: it.product_skus?.o2 },
+      currentStock: it.product_skus?.stock || 0, addQty: it.quantity || 0, origQty: it.quantity || 0, finalStock: it.product_skus?.stock || 0
     })))
     setLoadingItems(false)
   }
@@ -629,7 +636,7 @@ function EditInbound({ categories, products, skusByProduct }) {
     const toAdd = newItems.filter(ni => !existingSkuIds.has(ni.sku.id))
     if (toAdd.length) setOrderItems(p => [...p, ...toAdd])
   }
-  function updateQty(skuId, qty) { setOrderItems(p => p.map(it => it.sku.id === skuId ? { ...it, addQty: qty, finalStock: it.currentStock + qty } : it)) }
+  function updateQty(skuId, qty) { setOrderItems(p => p.map(it => it.sku.id === skuId ? { ...it, addQty: qty, finalStock: it.currentStock - (it.origQty || 0) + qty } : it)) }
   function deleteItems(skuIds) { const s = new Set(skuIds); setOrderItems(p => p.filter(it => !s.has(it.sku.id))) }
 
   async function saveOrder() {
@@ -644,9 +651,15 @@ function EditInbound({ categories, products, skusByProduct }) {
     setSaving(true)
     try {
       const totalQty = orderItems.reduce((s, it) => s + it.addQty, 0)
-      const { data: origItems } = await supabase.from('inbound_items').select('product_sku_id, quantity').eq('inbound_order_id', selectedOrder.id)
-      const origMap = {}
-      ;(origItems || []).forEach(it => { origMap[it.product_sku_id] = it.quantity })
+      const { data: origItems } = await selectAll(() => supabase.from('inbound_items')
+        .select('product_sku_id, quantity, product_skus(o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
+        .eq('inbound_order_id', selectedOrder.id))
+      // 이미 재고에 반영된 원래 입고분과 고친 내용의 "차이"만 지금 재고에 반영 (지운 항목은 되돌림, 0 아래로는 안 내려감)
+      const stockRes = await applyStockChanges(netStockChanges(
+        (origItems || []).map(o => ({ skuId: o.product_sku_id, qty: o.quantity, effect: 1 })),
+        orderItems.map(it => ({ skuId: it.sku.id, qty: it.addQty, effect: 1 }))), { floorZero: true })
+      const resBy = Object.fromEntries(stockRes.map(r => [r.skuId, r]))
+      const labelBy = Object.fromEntries((origItems || []).map(o => [o.product_sku_id, skuLabel(o.product_skus || {})]))
       await supabase.from('inbound_orders').update({
         inbound_date: info.inboundDate,
         box_count: info.boxCount ? parseInt(info.boxCount) : null,
@@ -657,15 +670,8 @@ function EditInbound({ categories, products, skusByProduct }) {
         note: info.note || null, total_quantity: totalQty
       }).eq('id', selectedOrder.id)
       await supabase.from('inbound_items').delete().eq('inbound_order_id', selectedOrder.id)
-      for (const item of orderItems) {
-        const { data: freshSku } = await supabase.from('product_skus').select('stock').eq('id', item.sku.id).single()
-        const currentDbStock = freshSku?.stock || 0
-        const origQty = origMap[item.sku.id] || 0
-        const finalStock = Math.max(0, currentDbStock - origQty + item.addQty)
-        await supabase.from('inbound_items').insert({ inbound_order_id: selectedOrder.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: finalStock })
-        await supabase.from('product_skus').update({ stock: finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
-        await supabase.from('stock_logs').insert({ product_sku_id: item.sku.id, change_type: 'inbound', quantity_before: currentDbStock, quantity_change: item.addQty - origQty, quantity_after: finalStock, option_label: skuLabel(item.sku), user_name: user?.email || '', created_by: user.id, note: '입고수정 ' + selectedOrder.order_number })
-      }
+      if (orderItems.length) await supabase.from('inbound_items').insert(orderItems.map(item => ({ inbound_order_id: selectedOrder.id, product_sku_id: item.sku.id, quantity: item.addQty, final_stock: resBy[item.sku.id]?.after ?? item.currentStock })))
+      if (stockRes.length) await supabase.from('stock_logs').insert(stockRes.map(r => ({ product_sku_id: r.skuId, change_type: 'inbound', quantity_before: r.before, quantity_change: r.after - r.before, quantity_after: r.after, option_label: labelBy[r.skuId] ?? skuLabel(orderItems.find(it => it.sku.id === r.skuId)?.sku || {}), user_name: user?.email || '', created_by: user.id, note: '입고수정 ' + selectedOrder.order_number })))
       toast.success('수정 완료'); loadOrders(); setAddingProduct(false)
     } catch (err) { toast.error(err.message) }
     finally { setSaving(false) }
@@ -824,7 +830,7 @@ function EditInbound({ categories, products, skusByProduct }) {
                                     <td />
                                     <td className="px-2 py-1.5 pl-16">
                                       <div className="flex items-center gap-1.5 text-xs text-surface-400">
-                                        <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />{opt}
+                                        <SkuThumb url={it.product_skus?.image_url} size={26} />{opt}
                                       </div>
                                     </td>
                                     <td className="px-2 py-1.5 text-right pr-3 text-xs font-mono text-primary-400 font-bold">+{it.quantity}</td>
@@ -909,7 +915,7 @@ function InboundHistory({ categories }) {
   async function loadOrders() {
     setLoading(true)
     let q = supabase.from('inbound_orders')
-      .select('id, order_number, inbound_date, total_quantity, truck_type, box_count, tax_paid, goods_amount, bl_number, created_at, inbound_items(id, quantity, final_stock, product_sku_id, product_skus(products(id, name, category_id), o1:option1_id(option_value), o2:option2_id(option_value)))')
+      .select('id, order_number, inbound_date, total_quantity, truck_type, box_count, tax_paid, goods_amount, bl_number, created_at, inbound_items(id, quantity, final_stock, product_sku_id, product_skus(image_url, products(id, name, category_id), o1:option1_id(option_value), o2:option2_id(option_value)))')
       .eq('order_type', 'inbound')
       .order('inbound_date', { ascending: false }).order('created_at', { ascending: false }).limit(300)
     if (yearFilter) q = q.gte('inbound_date', `${yearFilter}-01-01`).lte('inbound_date', `${yearFilter}-12-31`)
@@ -936,14 +942,15 @@ function InboundHistory({ categories }) {
 
   async function downloadOrderExcel(order) {
     try {
-      const { data: rawItems } = await supabase.from('inbound_items').select('id, quantity, product_sku_id').eq('inbound_order_id', order.id)
+      const { data: rawItems } = await selectAll(() => supabase.from('inbound_items').select('id, quantity, product_sku_id').eq('inbound_order_id', order.id))
       if (!rawItems?.length) return toast.error('입고 항목이 없습니다')
       const skuIds = rawItems.map(it => it.product_sku_id)
-      const { data: skuRows } = await supabase.from('product_skus').select('id, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').in('id', skuIds)
-      const { data: prodRows } = await supabase.from('products').select('id, name, storage_location_text, category_id, categories(name)').in('id', [...new Set((skuRows||[]).map(s => s.product_id))])
+      const { data: skuRows } = await selectIn(skuIds, __ids => supabase.from('product_skus').select('id, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').in('id', __ids))
+      const { data: prodRows } = await selectIn((skuRows||[]).map(s => s.product_id), __ids => supabase.from('products').select('id, name, storage_location_text, category_id, categories(name)').in('id', __ids))
       const skuMap = Object.fromEntries((skuRows||[]).map(s => [s.id, s]))
       const prodMap2 = Object.fromEntries((prodRows||[]).map(p => [p.id, p]))
       const items = rawItems.map(it => { const sku = skuMap[it.product_sku_id] || {}; const prod = prodMap2[sku.product_id] || {}; return { ...it, sku, prod } })
+      const ExcelJS = await import('exceljs').then(m => m.default || m)      // 엑셀 라이브러리(약 1MB)는 내려받을 때만 불러옴 → 앱이 처음 열리는 속도가 빨라짐
       const workbook = new ExcelJS.Workbook(); workbook.creator = 'StockOS'
       const grouped = new Map()
       items.forEach(it => { const pid = it.prod.id || 'unknown'; if (!grouped.has(pid)) grouped.set(pid, { prod: it.prod, items: [] }); grouped.get(pid).items.push(it) })
@@ -1073,7 +1080,7 @@ function InboundHistory({ categories }) {
                               <tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10 hover:bg-surface-800/5">
                                 <td className="px-4 py-1.5 pl-20">
                                   <div className="flex items-center gap-1.5 text-xs text-surface-400">
-                                    <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />{opt}
+                                    <SkuThumb url={it.product_skus?.image_url} size={26} />{opt}
                                   </div>
                                 </td>
                                 <td className="px-4 py-1.5 text-center font-mono font-bold text-primary-400 text-sm">+{it.quantity}</td>
@@ -1095,10 +1102,6 @@ function InboundHistory({ categories }) {
   )
 }
 
-// ── 입고 차트 ─────────────────────────────────────────────
-const CHART_COLORS = ['#0ea5e9','#38bdf8','#a78bfa','#34d399','#fb923c','#f472b6','#facc15','#60a5fa']
-
-
 // ── 메인 ─────────────────────────────────────────────────
 export default function InboundPage() {
   const [mode, setMode] = useState(null)
@@ -1111,9 +1114,9 @@ export default function InboundPage() {
 
   async function loadBaseData() {
     const [{ data: cats }, { data: prods }, { data: skus }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, category_id').eq('is_active', true).order('name'),
-      supabase.from('product_skus').select('id, stock, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true)
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, category_id').eq('is_active', true).order('name')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true))
     ])
     setCategories(cats || []); setProducts(prods || [])
     const map = {};(skus || []).forEach(s => { if (!map[s.product_id]) map[s.product_id] = []; map[s.product_id].push(s) })

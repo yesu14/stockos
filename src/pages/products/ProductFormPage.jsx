@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { ChevronLeft, Trash2, Zap, ImagePlus, X, Save, Plus } from 'lucide-react'
+import { ChevronLeft, Trash2, Zap, ImagePlus, X, Save, Plus, Copy } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { selectAll } from '../../lib/fetchAll'
 
 function Field({ label, children, required }) {
   return (
@@ -22,6 +23,48 @@ function Input({ value, onChange, type = 'text', placeholder, className = '' }) 
   )
 }
 
+// 옵션(SKU)별 이미지 업로드 셀
+function SkuImageCell({ url, uploading, onPick, onRemove, onCopy }) {
+  const ref = useRef(null)
+  return (
+    <div className="flex items-center justify-center gap-1.5">
+      <input ref={ref} type="file" accept="image/*" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = '' }} />
+      {url ? (
+        <div className="relative w-11 h-11 shrink-0">
+          <img src={url} alt="" title="클릭하면 이미지를 바꿀 수 있어요" onClick={() => !uploading && ref.current?.click()}
+            className="w-11 h-11 rounded-lg object-cover border border-surface-700 cursor-pointer" />
+          {uploading && (
+            <div className="absolute inset-0 rounded-lg bg-black/60 flex items-center justify-center">
+              <div className="w-4 h-4 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+          <button type="button" onClick={onRemove} title="이미지 삭제"
+            style={{ color: '#fff' }}
+            className="absolute -top-1.5 -right-1.5 w-[18px] h-[18px] rounded-full bg-red-500 flex items-center justify-center shadow">
+            <X size={10} />
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => ref.current?.click()} disabled={uploading} title="옵션 이미지 추가"
+          className="w-11 h-11 shrink-0 rounded-lg border-2 border-dashed border-surface-600 hover:border-primary-500 flex items-center justify-center text-surface-500 hover:text-primary-400 transition-colors disabled:opacity-50">
+          {uploading
+            ? <div className="w-4 h-4 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
+            : <ImagePlus size={16} />}
+        </button>
+      )}
+      {url && onCopy && (
+        <button type="button" onClick={onCopy} title="같은 옵션1 값 중 이미지가 없는 옵션에 복사"
+          className="p-1.5 rounded-lg text-surface-500 hover:text-primary-400 hover:bg-primary-500/10 transition-colors">
+          <Copy size={13} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+const newRowKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2))
+
 export default function ProductFormPage() {
   const navigate = useNavigate()
   const { id } = useParams()
@@ -30,6 +73,7 @@ export default function ProductFormPage() {
 
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [skuUploading, setSkuUploading] = useState({})  // rowKey → true
   const [categories, setCategories] = useState([])
   const [showAddCat, setShowAddCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
@@ -57,7 +101,7 @@ export default function ProductFormPage() {
   useEffect(() => { loadRefData(); if (isEdit) loadProduct() }, [id])
 
   async function loadRefData() {
-    const { data: cats } = await supabase.from('categories').select('*').order('sort_order')
+    const { data: cats } = await selectAll(() => supabase.from('categories').select('*').order('sort_order'))
     setCategories(cats || [])
   }
 
@@ -78,7 +122,11 @@ export default function ProductFormPage() {
   }
 
   async function loadProduct() {
-    const { data: p } = await supabase.from('products').select('*').eq('id', id).single()
+    const [{ data: p }, { data: opts }, { data: skus }] = await Promise.all([                 // 서로 상관없는 조회 3개를 동시에
+      supabase.from('products').select('*').eq('id', id).single(),
+      selectAll(() => supabase.from('product_options').select('*').eq('product_id', id).order('option_number').order('sort_order')),
+      selectAll(() => supabase.from('product_skus').select('*, o1:option1_id(*), o2:option2_id(*)').eq('product_id', id)),
+    ])
     if (!p) return
     setForm({
       category_id: p.category_id || '',
@@ -88,14 +136,12 @@ export default function ProductFormPage() {
       factory: p.factory || '', note: p.note || '', image_url: p.image_url || '', margin: p.margin || '',
       option_count: p.option_count || 1,
     })
-    const { data: opts } = await supabase.from('product_options').select('*').eq('product_id', id).order('option_number').order('sort_order')
-    const { data: skus } = await supabase.from('product_skus').select('*, o1:option1_id(*), o2:option2_id(*)').eq('product_id', id)
     if (opts?.length > 0) {
       const opt1 = opts.filter(o => o.option_number === 1)
       const opt2 = opts.filter(o => o.option_number === 2)
       if (opt1.length) { setOpt1Name(opt1[0].option_name); setOpt1Values(opt1.map(o => o.option_value).join(',')) }
       if (opt2.length) { setOpt2Name(opt2[0].option_name); setOpt2Values(opt2.map(o => o.option_value).join(',')) }
-      if (skus) { setSkuRows(skus.map(s => ({ _id: s.id, opt1Val: s.o1?.option_value || '', opt2Val: s.o2?.option_value || '', stock: s.stock }))); setOptionsApplied(true) }
+      if (skus) { setSkuRows(skus.map(s => ({ _id: s.id, _key: s.id, opt1Val: s.o1?.option_value || '', opt2Val: s.o2?.option_value || '', stock: s.stock, image_url: s.image_url || '' }))); setOptionsApplied(true) }
     }
   }
 
@@ -117,12 +163,42 @@ export default function ProductFormPage() {
     finally { setUploading(false) }
   }
 
+  // 옵션별 이미지 업로드 (행 키 기준 — 업로드 중 행을 지워도 안전)
+  async function handleSkuImageUpload(rowKey, file) {
+    if (!file.type.startsWith('image/')) return toast.error('이미지 파일만 가능합니다')
+    if (file.size > 5 * 1024 * 1024) return toast.error('5MB 이하만 가능합니다')
+    setSkuUploading(p => ({ ...p, [rowKey]: true }))
+    try {
+      const ext = file.name.split('.').pop()
+      const fileName = `sku-options/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
+      const { error } = await supabase.storage.from('product-images').upload(fileName, file)
+      if (error) throw error
+      const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(fileName)
+      setSkuRows(p => p.map(r => r._key === rowKey ? { ...r, image_url: publicUrl } : r))
+      toast.success('옵션 이미지 업로드 완료')
+    } catch (err) { toast.error('업로드 실패: ' + err.message) }
+    finally { setSkuUploading(p => { const n = { ...p }; delete n[rowKey]; return n }) }
+  }
+
+  // 같은 옵션1 값(예: 같은 색상)인 행 중 이미지가 없는 행에 이 이미지를 복사
+  function copyImageToSameOpt1(rowKey) {
+    const src = skuRows.find(r => r._key === rowKey)
+    if (!src?.image_url) return
+    const targets = skuRows.filter(r => r._key !== rowKey && r.opt1Val === src.opt1Val && !r.image_url)
+    if (targets.length === 0) return toast('복사할 빈 옵션이 없습니다')
+    setSkuRows(p => p.map(r => (r._key !== rowKey && r.opt1Val === src.opt1Val && !r.image_url) ? { ...r, image_url: src.image_url } : r))
+    toast.success(`'${src.opt1Val}' 옵션 ${targets.length}개에 이미지를 복사했습니다`)
+  }
+
   function applyOptions() {
     if (!opt1Name || !opt1Values.trim()) return toast.error('옵션1 이름과 값을 입력하세요')
     if (form.option_count === 2 && (!opt2Name || !opt2Values.trim())) return toast.error('옵션2 이름과 값을 입력하세요')
     const v1 = opt1Values.split(',').map(s => s.trim()).filter(Boolean)
     const v2 = form.option_count === 2 ? opt2Values.split(',').map(s => s.trim()).filter(Boolean) : []
-    let rows = form.option_count === 1 ? v1.map(v => ({ opt1Val: v, opt2Val: '', stock: 0 })) : v1.flatMap(v1val => v2.map(v2val => ({ opt1Val: v1val, opt2Val: v2val, stock: 0 })))
+    const keepImg = {}
+    skuRows.forEach(r => { if (r.image_url) keepImg[r.opt1Val + '|' + r.opt2Val] = r.image_url })
+    const mk = (a, b) => ({ _key: newRowKey(), opt1Val: a, opt2Val: b, stock: 0, image_url: keepImg[a + '|' + b] || '' })
+    let rows = form.option_count === 1 ? v1.map(v => mk(v, '')) : v1.flatMap(v1val => v2.map(v2val => mk(v1val, v2val)))
     setSkuRows(rows); setOptionsApplied(true)
     toast.success(`${rows.length}개 옵션 조합 생성됨`)
   }
@@ -172,7 +248,8 @@ export default function ProductFormPage() {
         product_id: productId,
         option1_id: insertedOpt1?.find(o => o.option_value === row.opt1Val)?.id || null,
         option2_id: insertedOpt2?.find(o => o.option_value === row.opt2Val)?.id || null,
-        stock: Number(row.stock) || 0
+        stock: Number(row.stock) || 0,
+        ...(row.image_url ? { image_url: row.image_url } : {})
       })).filter(s => s.option1_id))
       toast.success(isEdit ? '수정 완료' : '상품 추가 완료')
       navigate('/products')
@@ -298,11 +375,11 @@ export default function ProductFormPage() {
         <button onClick={applyOptions} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition-colors"><Zap size={15} /> 옵션 적용</button>
       </div>
 
-      {/* 5. 재고 설정 */}
+      {/* 5. 옵션별 이미지 · 재고 설정 */}
       {optionsApplied && skuRows.length > 0 && (
         <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-white flex items-center gap-2"><span className="w-6 h-6 bg-primary-500/20 text-primary-400 rounded-lg flex items-center justify-center text-xs font-bold">5</span>재고 설정 <span className="text-sm font-normal text-surface-400">({skuRows.length}개)</span></h2>
+            <h2 className="font-semibold text-white flex items-center gap-2"><span className="w-6 h-6 bg-primary-500/20 text-primary-400 rounded-lg flex items-center justify-center text-xs font-bold">5</span>옵션별 이미지 · 재고 설정 <span className="text-sm font-normal text-surface-400">({skuRows.length}개)</span></h2>
             <button onClick={() => setShowBulk(!showBulk)} className="flex items-center gap-2 px-3 py-2 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded-xl text-xs font-medium transition-colors"><Zap size={13} /> 재고 일괄설정</button>
           </div>
           {showBulk && (
@@ -319,14 +396,21 @@ export default function ProductFormPage() {
               <thead><tr className="bg-surface-800/50 border-b border-surface-800">
                 <th className="px-4 py-3 text-left text-xs font-semibold text-surface-400 uppercase">{opt1Name}</th>
                 {form.option_count === 2 && <th className="px-4 py-3 text-left text-xs font-semibold text-surface-400 uppercase">{opt2Name}</th>}
+                <th className="px-4 py-3 text-center text-xs font-semibold text-surface-400 uppercase">이미지</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-surface-400 uppercase">재고</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-surface-400 uppercase">삭제</th>
               </tr></thead>
               <tbody className="divide-y divide-surface-800">
                 {skuRows.map((row, idx) => (
-                  <tr key={idx} className="hover:bg-surface-800/30 transition-colors">
+                  <tr key={row._key || idx} className="hover:bg-surface-800/30 transition-colors">
                     <td className="px-4 py-3 text-sm text-surface-200">{row.opt1Val}</td>
                     {form.option_count === 2 && <td className="px-4 py-3 text-sm text-surface-200">{row.opt2Val}</td>}
+                    <td className="px-3 py-2">
+                      <SkuImageCell url={row.image_url} uploading={!!skuUploading[row._key]}
+                        onPick={f => handleSkuImageUpload(row._key, f)}
+                        onRemove={() => setSkuRows(p => p.map(r => r._key === row._key ? { ...r, image_url: '' } : r))}
+                        onCopy={form.option_count === 2 ? () => copyImageToSameOpt1(row._key) : undefined} />
+                    </td>
                     <td className="px-4 py-3"><input type="number" min="0" value={row.stock} onFocus={e => { if (e.target.value === '0') e.target.value = '' }} onChange={e => { const v=parseInt(e.target.value.replace(/[^0-9]/g,''))||0; setSkuRows(p=>p.map((r,i)=>i===idx?{...r,stock:v}:r)) }} className="w-24 mx-auto block bg-surface-800 border border-surface-700 rounded-lg px-3 py-1.5 text-sm text-white text-center focus:outline-none focus:border-primary-500" /></td>
                     <td className="px-4 py-3 text-center"><button onClick={() => setSkuRows(p=>p.filter((_,i)=>i!==idx))} className="p-1.5 rounded-lg hover:bg-red-500/10 text-surface-500 hover:text-red-400 transition-colors"><Trash2 size={14} /></button></td>
                   </tr>
@@ -334,6 +418,10 @@ export default function ProductFormPage() {
               </tbody>
             </table>
           </div>
+          <p className="text-xs text-surface-500 mt-2">
+            옵션마다 이미지를 따로 등록할 수 있어요 (대표 이미지와는 별개). JPG·PNG·WEBP, 5MB 이하.
+            {form.option_count === 2 && ' 같은 색상처럼 이미지가 같은 옵션은 복사 버튼으로 한 번에 채울 수 있어요.'}
+          </p>
         </div>
       )}
 

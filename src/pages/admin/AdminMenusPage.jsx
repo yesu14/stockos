@@ -4,15 +4,16 @@ import {
   Plus, Trash2, Edit2, Save, X, GripVertical,
   LayoutDashboard, Package, Boxes, ArrowDownCircle, ArrowUpCircle,
   RotateCcw, ShoppingCart, Shield, BarChart2, Settings,
-  Star, FileText, Bell, Users, Tag, Layers
+  Star, FileText, Bell, Users, Tag, Layers, MapPin
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { selectAll } from '../../lib/fetchAll'
 
 // 아이콘 맵
 const ICON_MAP = {
   LayoutDashboard, Package, Boxes, ArrowDownCircle, ArrowUpCircle,
   RotateCcw, ShoppingCart, Shield, BarChart2, Settings,
-  Star, FileText, Bell, Users, Tag, Layers
+  Star, FileText, Bell, Users, Tag, Layers, MapPin
 }
 
 const ICON_OPTIONS = Object.keys(ICON_MAP)
@@ -39,7 +40,7 @@ export default function AdminMenusPage() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('menus').select('*').order('sort_order')
+    const { data } = await selectAll(() => supabase.from('menus').select('*').order('sort_order'))
     setMenus(data || [])
     setLoading(false)
   }

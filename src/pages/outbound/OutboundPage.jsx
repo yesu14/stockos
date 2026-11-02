@@ -3,25 +3,16 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import {
   PackageMinus, Package, Search, ChevronDown, ChevronRight,
-  Truck, X, Trash2, Plus, Save, Pencil, Building2, Download, RefreshCw
+  Truck, X, Trash2, Plus, Save, Pencil, Building2, Download
 } from 'lucide-react'
-import {
-  LineChart, Line, BarChart, Bar, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend
-} from 'recharts'
-import ExcelJS from 'exceljs'
 import toast from 'react-hot-toast'
 import SuppliersPage from '../suppliers/SuppliersPage'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll, selectIn } from '../../lib/fetchAll'
+import { applyStockChanges, netStockChanges } from '../../lib/stock'
 
 function skuLabel(sku) {
   return [sku?.o1?.option_value, sku?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
-}
-function fmtMoney(n) {
-  const v = Number(n || 0)
-  if (v >= 1000000) return `₩${(v/1000000).toFixed(1)}M`
-  if (v >= 1000) return `₩${(v/1000).toFixed(0)}K`
-  return `₩${v}`
 }
 
 // ── 체크박스 ──────────────────────────────────────────────
@@ -108,6 +99,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                     const val = values[sku.id] ?? ''
                     return (
                       <td key={v2.option_value} className="px-2 py-2">
+                        <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                         <div className="text-center text-xs text-surface-500 mb-1">재고 {sku.stock}</div>
                         <input type="number" min="0" value={val} onChange={e => onChange(sku.id, e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
                           className={'w-full text-center bg-surface-800 border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none ' + (val > 0 ? 'border-orange-500 bg-orange-500/10' : 'border-surface-700')} />
@@ -119,6 +111,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                     const val = values[sku.id] ?? ''
                     return (
                       <td key="single" className="px-2 py-2">
+                        <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                         <div className="text-center text-xs text-surface-500 mb-1">재고 {sku.stock}</div>
                         <input type="number" min="0" value={val} onChange={e => onChange(sku.id, e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
                           className={'w-full text-center bg-surface-800 border rounded-lg px-2 py-1.5 text-sm text-white font-mono focus:outline-none ' + (val > 0 ? 'border-orange-500 bg-orange-500/10' : 'border-surface-700')} />
@@ -256,6 +249,7 @@ function OutboundItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, pro
                       return (
                         <div key={item.sku.id} className="flex items-center gap-2 pl-12 pr-3 py-2 border-t border-surface-800/20 hover:bg-surface-800/5">
                           <Chk state={!!checked[item.sku.id]} onChange={() => setChecked(p=>({...p,[item.sku.id]:!p[item.sku.id]}))} />
+                          <SkuThumb url={item.sku.image_url} size={30} />
                           <span className="flex-1 text-xs text-surface-300">{skuLabel(item.sku)}</span>
                           <span className="w-14 text-center text-xs font-mono text-surface-400">{item.currentStock}</span>
                           <div className="w-24 relative">
@@ -383,6 +377,7 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
                       return (
                         <div key={sku.id} className={'flex items-center gap-2 pl-12 pr-3 py-1.5 border-t border-surface-800/20 '+(alreadyIn?'opacity-40':'')}>
                           <Chk state={alreadyIn?false:!!checked[sku.id]} onChange={() => toggleSku(sku.id)}/>
+                          <SkuThumb url={sku.image_url} size={30} />
                           <span className="flex-1 text-xs text-surface-300">{skuLabel(sku)}</span>
                           <span className="text-xs text-surface-500 font-mono">재고 {sku.stock}</span>
                           {alreadyIn && <span className="text-xs text-orange-400/70">추가됨</span>}
@@ -500,10 +495,20 @@ function NewOutbound({ categories, products, skusByProduct, suppliers, onDone })
       }).select().single()
       if (oErr) throw oErr
       await supabase.from('inbound_orders').update({ total_quantity: totalQty }).eq('id', order.id)
-      for (const item of items) {
-        await supabase.from('inbound_items').insert({ inbound_order_id: order.id, product_sku_id: item.sku.id, quantity: item.deductQty, final_stock: item.finalStock })
-        await supabase.from('product_skus').update({ stock: item.finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
-        await supabase.from('stock_logs').insert({ product_sku_id: item.sku.id, change_type: 'outbound', quantity_before: item.currentStock, quantity_change: -item.deductQty, quantity_after: item.finalStock, option_label: skuLabel(item.sku), user_name: user?.email||'', created_by: user.id, note: '납품 '+orderNumber })
+      // 재고는 "지금 DB 값" 기준으로 안전하게 줄임 (그 사이 다른 곳에서 팔렸으면 부족하다고 알려줌). 하나라도 실패하면 이미 줄인 것도 되돌림
+      let stockRes
+      try { stockRes = await applyStockChanges(items.map(it => ({ skuId: it.sku.id, delta: -it.deductQty }))) }
+      catch (e) {
+        await supabase.from('inbound_orders').delete().eq('id', order.id)
+        const bad = e.code === 'STOCK_LOW' && items.find(it => it.sku.id === e.skuId)
+        throw bad ? new Error(`재고 부족: ${bad.product?.name} - ${skuLabel(bad.sku)} (현재 ${e.before}개)`) : e
+      }
+      try {
+        await supabase.from('inbound_items').insert(items.map((item, i) => ({ inbound_order_id: order.id, product_sku_id: item.sku.id, quantity: item.deductQty, final_stock: stockRes[i].after })))
+        await supabase.from('stock_logs').insert(items.map((item, i) => ({ product_sku_id: item.sku.id, change_type: 'outbound', quantity_before: stockRes[i].before, quantity_change: -item.deductQty, quantity_after: stockRes[i].after, option_label: skuLabel(item.sku), user_name: user?.email||'', created_by: user.id, note: '납품 '+orderNumber })))
+      } catch (e) {
+        await applyStockChanges(items.map(it => ({ skuId: it.sku.id, delta: it.deductQty })), { allowNegative: true }).catch(() => {})
+        await supabase.from('inbound_orders').delete().eq('id', order.id); throw e
       }
       toast.success('납품 완료! '+orderNumber); onDone()
     } catch(err) { toast.error(err.message) }
@@ -563,7 +568,7 @@ function EditOutbound({ categories, products, skusByProduct, suppliers }) {
   async function loadOrders() {
     setLoading(true)
     const { data } = await supabase.from('inbound_orders')
-      .select('id, order_number, inbound_date, total_quantity, supplier_id, truck_type, box_count, tax_paid, note, created_at, inbound_items(quantity, product_sku_id, product_skus(products(id,name), o1:option1_id(option_value), o2:option2_id(option_value)))')
+      .select('id, order_number, inbound_date, total_quantity, supplier_id, truck_type, box_count, tax_paid, note, created_at, inbound_items(quantity, product_sku_id, product_skus(image_url, products(id,name), o1:option1_id(option_value), o2:option2_id(option_value)))')
       .eq('order_type','outbound')
       .order('inbound_date',{ascending:false}).order('created_at',{ascending:false}).limit(300)
     setOrders(data||[]); setLoading(false)
@@ -572,14 +577,14 @@ function EditOutbound({ categories, products, skusByProduct, suppliers }) {
   async function selectOrder(order) {
     setSelectedOrder(order); setLoadingItems(true); setAddingProduct(false)
     setInfo({ supplierId: order.supplier_id||'', outboundDate: order.inbound_date||'', boxCount: order.box_count||'', truckType: order.truck_type||'', deliveryAmount: order.tax_paid||'', note: order.note||'' })
-    const { data } = await supabase.from('inbound_items')
-      .select('id, quantity, final_stock, product_sku_id, product_skus(stock, products(id,name,category_id), o1:option1_id(option_name,option_value,sort_order), o2:option2_id(option_name,option_value,sort_order))')
-      .eq('inbound_order_id', order.id)
+    const { data } = await selectAll(() => supabase.from('inbound_items')
+      .select('id, quantity, final_stock, product_sku_id, product_skus(image_url, stock, products(id,name,category_id), o1:option1_id(option_name,option_value,sort_order), o2:option2_id(option_name,option_value,sort_order))')
+      .eq('inbound_order_id', order.id))
     setOrderItems((data||[]).map(it => ({
       id: it.id, product: it.product_skus?.products||{},
       catId: it.product_skus?.products?.category_id||'__none__',
-      sku: { id: it.product_sku_id, stock: it.product_skus?.stock||0, o1: it.product_skus?.o1, o2: it.product_skus?.o2 },
-      currentStock: it.product_skus?.stock||0, deductQty: it.quantity||0, finalStock: it.final_stock||0
+      sku: { id: it.product_sku_id, stock: it.product_skus?.stock||0, image_url: it.product_skus?.image_url, o1: it.product_skus?.o1, o2: it.product_skus?.o2 },
+      currentStock: it.product_skus?.stock||0, deductQty: it.quantity||0, origQty: it.quantity||0, finalStock: it.product_skus?.stock||0
     })))
     setLoadingItems(false)
   }
@@ -587,7 +592,7 @@ function EditOutbound({ categories, products, skusByProduct, suppliers }) {
   const existingSkuIds = useMemo(() => new Set(orderItems.map(it=>it.sku.id)), [orderItems])
 
   function addItems(newItems) { const toAdd=newItems.filter(ni=>!existingSkuIds.has(ni.sku.id)); if(toAdd.length) setOrderItems(p=>[...p,...toAdd]) }
-  function updateQty(skuId, qty) { setOrderItems(p=>p.map(it=>it.sku.id===skuId?{...it,deductQty:qty,finalStock:it.currentStock-qty}:it)) }
+  function updateQty(skuId, qty) { setOrderItems(p=>p.map(it=>it.sku.id===skuId?{...it,deductQty:qty,finalStock:it.currentStock+(it.origQty||0)-qty}:it)) }
   function deleteItems(skuIds) { const s=new Set(skuIds); setOrderItems(p=>p.filter(it=>!s.has(it.sku.id))) }
 
   async function saveOrder() {
@@ -601,6 +606,21 @@ function EditOutbound({ categories, products, skusByProduct, suppliers }) {
     setSaving(true)
     try {
       const totalQty = orderItems.reduce((s,it)=>s+it.deductQty,0)
+      const { data: origItems } = await selectAll(() => supabase.from('inbound_items')
+        .select('product_sku_id, quantity, product_skus(o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
+        .eq('inbound_order_id', selectedOrder.id))
+      // 이미 재고에서 빠진 원래 납품분과 고친 내용의 "차이"만 지금 재고에 반영 (지운 항목은 재고 복구)
+      let stockRes
+      try {
+        stockRes = await applyStockChanges(netStockChanges(
+          (origItems||[]).map(o => ({ skuId: o.product_sku_id, qty: o.quantity, effect: -1 })),
+          orderItems.map(it => ({ skuId: it.sku.id, qty: it.deductQty, effect: -1 }))))
+      } catch (e) {
+        const bad = e.code === 'STOCK_LOW' && orderItems.find(it => it.sku.id === e.skuId)
+        throw bad ? new Error(`재고 부족: ${bad.product?.name} - ${skuLabel(bad.sku)} (현재 ${e.before}개)`) : e
+      }
+      const resBy = Object.fromEntries(stockRes.map(r => [r.skuId, r]))
+      const labelBy = Object.fromEntries((origItems||[]).map(o => [o.product_sku_id, skuLabel(o.product_skus || {})]))
       await supabase.from('inbound_orders').update({
         supplier_id: info.supplierId||null, inbound_date: info.outboundDate,
         box_count: info.boxCount ? parseInt(info.boxCount) : null,
@@ -609,10 +629,8 @@ function EditOutbound({ categories, products, skusByProduct, suppliers }) {
         note: info.note||null, total_quantity: totalQty
       }).eq('id', selectedOrder.id)
       await supabase.from('inbound_items').delete().eq('inbound_order_id', selectedOrder.id)
-      for (const item of orderItems) {
-        await supabase.from('inbound_items').insert({ inbound_order_id: selectedOrder.id, product_sku_id: item.sku.id, quantity: item.deductQty, final_stock: item.finalStock })
-        await supabase.from('product_skus').update({ stock: item.finalStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
-      }
+      if (orderItems.length) await supabase.from('inbound_items').insert(orderItems.map(item => ({ inbound_order_id: selectedOrder.id, product_sku_id: item.sku.id, quantity: item.deductQty, final_stock: resBy[item.sku.id]?.after ?? item.currentStock })))
+      if (stockRes.length) await supabase.from('stock_logs').insert(stockRes.map(r => ({ product_sku_id: r.skuId, change_type: 'outbound', quantity_before: r.before, quantity_change: r.after - r.before, quantity_after: r.after, option_label: labelBy[r.skuId] ?? skuLabel(orderItems.find(it => it.sku.id === r.skuId)?.sku || {}), user_name: user?.email||'', created_by: user.id, note: '납품수정 '+selectedOrder.order_number })))
       toast.success('수정 완료'); loadOrders(); setAddingProduct(false)
     } catch(err) { toast.error(err.message) }
     finally { setSaving(false) }
@@ -747,7 +765,7 @@ function EditOutbound({ categories, products, skusByProduct, suppliers }) {
                                 const opt=[it.product_skus?.o1?.option_value,it.product_skus?.o2?.option_value].filter(Boolean).join(' / ')||'Default'
                                 return (
                                   <tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10">
-                                    <td/><td className="px-2 py-1.5 pl-16"><div className="flex items-center gap-1.5 text-xs text-surface-400"><span className="w-1 h-1 rounded-full bg-surface-700 shrink-0"/>{opt}</div></td>
+                                    <td/><td className="px-2 py-1.5 pl-16"><div className="flex items-center gap-1.5 text-xs text-surface-400"><SkuThumb url={it.product_skus?.image_url} size={26}/>{opt}</div></td>
                                     <td className="px-2 py-1.5 text-right pr-3 text-xs font-mono text-orange-400 font-bold">-{it.quantity}</td>
                                   </tr>
                                 )
@@ -827,7 +845,7 @@ function OutboundHistory({ suppliers, categories }) {
   async function loadOrders() {
     setLoading(true)
     let q = supabase.from('inbound_orders')
-      .select('id, order_number, inbound_date, total_quantity, supplier_id, truck_type, box_count, tax_paid, created_at, inbound_items(id,quantity,final_stock,product_sku_id,product_skus(products(id,name,category_id),o1:option1_id(option_value),o2:option2_id(option_value)))')
+      .select('id, order_number, inbound_date, total_quantity, supplier_id, truck_type, box_count, tax_paid, created_at, inbound_items(id,quantity,final_stock,product_sku_id,product_skus(image_url, products(id,name,category_id),o1:option1_id(option_value),o2:option2_id(option_value)))')
       .eq('order_type','outbound').order('inbound_date',{ascending:false}).order('created_at',{ascending:false}).limit(300)
     if(yearFilter) q=q.gte('inbound_date',`${yearFilter}-01-01`).lte('inbound_date',`${yearFilter}-12-31`)
     if(selectedSupplier) q=q.eq('supplier_id',selectedSupplier)
@@ -854,14 +872,15 @@ function OutboundHistory({ suppliers, categories }) {
 
   async function downloadExcel(order) {
     try {
-      const { data: rawItems } = await supabase.from('inbound_items').select('id,quantity,product_sku_id').eq('inbound_order_id',order.id)
+      const { data: rawItems } = await selectAll(() => supabase.from('inbound_items').select('id,quantity,product_sku_id').eq('inbound_order_id',order.id))
       if(!rawItems?.length) return toast.error('납품 항목이 없습니다')
       const skuIds=rawItems.map(it=>it.product_sku_id)
-      const { data: skuRows } = await supabase.from('product_skus').select('id,product_id,o1:option1_id(option_name,option_value,sort_order),o2:option2_id(option_name,option_value,sort_order)').in('id',skuIds)
-      const { data: prodRows } = await supabase.from('products').select('id,name,storage_location_text,category_id,categories(name)').in('id',[...new Set((skuRows||[]).map(s=>s.product_id))])
+      const { data: skuRows } = await selectIn(skuIds, __ids => supabase.from('product_skus').select('id,product_id,o1:option1_id(option_name,option_value,sort_order),o2:option2_id(option_name,option_value,sort_order)').in('id',__ids))
+      const { data: prodRows } = await selectIn((skuRows||[]).map(s=>s.product_id), __ids => supabase.from('products').select('id,name,storage_location_text,category_id,categories(name)').in('id',__ids))
       const skuMap=Object.fromEntries((skuRows||[]).map(s=>[s.id,s]))
       const prodMap2=Object.fromEntries((prodRows||[]).map(p=>[p.id,p]))
       const items=rawItems.map(it=>{const sku=skuMap[it.product_sku_id]||{};const prod=prodMap2[sku.product_id]||{};return{...it,sku,prod}})
+      const ExcelJS = await import('exceljs').then(m => m.default || m)      // 엑셀 라이브러리(약 1MB)는 내려받을 때만 불러옴 → 앱이 처음 열리는 속도가 빨라짐
       const workbook=new ExcelJS.Workbook(); workbook.creator='StockOS'
       const grouped=new Map()
       items.forEach(it=>{const pid=it.prod.id||'unknown';if(!grouped.has(pid))grouped.set(pid,{prod:it.prod,items:[]});grouped.get(pid).items.push(it)})
@@ -948,7 +967,7 @@ function OutboundHistory({ suppliers, categories }) {
                           </tr>,
                           ...(!prodOpen?[]:pitems.map(it => {
                             const opt=[it.product_skus?.o1?.option_value,it.product_skus?.o2?.option_value].filter(Boolean).join(' / ')||'Default'
-                            return (<tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10"><td className="px-4 py-1.5 pl-20"><div className="flex items-center gap-1.5 text-xs text-surface-400"><span className="w-1 h-1 rounded-full bg-surface-700 shrink-0"/>{opt}</div></td><td className="px-4 py-1.5 text-center font-mono font-bold text-orange-400 text-sm">-{it.quantity}</td><td/></tr>)
+                            return (<tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10"><td className="px-4 py-1.5 pl-20"><div className="flex items-center gap-1.5 text-xs text-surface-400"><SkuThumb url={it.product_skus?.image_url} size={26}/>{opt}</div></td><td className="px-4 py-1.5 text-center font-mono font-bold text-orange-400 text-sm">-{it.quantity}</td><td/></tr>)
                           }))
                         ]
                       }))
@@ -978,16 +997,16 @@ export default function OutboundPage() {
   useEffect(() => { loadBaseData() }, [])
 
   async function reloadSuppliers() {
-    const { data } = await supabase.from('suppliers').select('id, name').order('name')
+    const { data } = await selectAll(() => supabase.from('suppliers').select('id, name').order('name'))
     setSuppliers(data||[])
   }
 
   async function loadBaseData() {
     const [{ data:cats },{ data:prods },{ data:skus },{ data:supp }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, category_id').eq('is_active',true).order('name'),
-      supabase.from('product_skus').select('id, stock, product_id, o1:option1_id(option_name,option_value,sort_order), o2:option2_id(option_name,option_value,sort_order)').eq('is_active',true),
-      supabase.from('suppliers').select('id, name').order('name')
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, category_id').eq('is_active',true).order('name')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, o1:option1_id(option_name,option_value,sort_order), o2:option2_id(option_name,option_value,sort_order)').eq('is_active',true)),
+      selectAll(() => supabase.from('suppliers').select('id, name').order('name'))
     ])
     setCategories(cats||[]); setProducts(prods||[]); setSuppliers(supp||[])
     const map={}; (skus||[]).forEach(s=>{if(!map[s.product_id])map[s.product_id]=[];map[s.product_id].push(s)})

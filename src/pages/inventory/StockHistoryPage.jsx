@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { ChevronLeft, Search, Package, ChevronDown, ChevronRight, X } from 'lucide-react'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
 
 const TYPE_LABEL = {
   inbound:  { label: '입고',    color: 'text-emerald-400', bg: 'bg-emerald-500/15' },
@@ -29,9 +31,9 @@ export default function StockHistoryPage() {
   async function loadData() {
     setLoading(true)
     const [{ data: cats }, { data: prods }, { data: skus }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, category_id, image_url').eq('is_active', true).order('name'),
-      supabase.from('product_skus').select('id, stock, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true)
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, category_id, image_url').eq('is_active', true).order('name')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true))
     ])
     setCategories(cats || [])
     setProducts(prods || [])
@@ -153,6 +155,7 @@ export default function StockHistoryPage() {
                             <button onClick={() => loadLogs(sku.id)}
                               className={`w-full flex items-center gap-3 pl-16 pr-4 py-2 transition-colors text-left ${skuOpen ? 'bg-primary-500/8' : 'hover:bg-surface-800/10'}`}>
                               {skuOpen ? <ChevronDown size={12} className="text-primary-400 shrink-0" /> : <ChevronRight size={12} className="text-surface-500 shrink-0" />}
+                              <SkuThumb url={sku.image_url} size={28} />
                               <span className="flex-1 text-sm text-surface-200">{skuLabel(sku)}</span>
                               <span className={'text-sm font-mono font-bold ' + (sku.stock < 10 ? 'text-red-400' : 'text-emerald-400')}>{sku.stock}</span>
                               <span className="text-xs text-surface-500 ml-1">현재재고</span>

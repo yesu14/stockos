@@ -3,6 +3,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { Bell, BellOff, Save, AlertTriangle, CheckCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
 
 // ── 공통 트리 데이터 빌더 ──────────────────────────────────
 function buildTree(categories, products, skusByProduct) {
@@ -88,6 +90,7 @@ function AlertsTab({ categories, products, skusByProduct, alertsBySkuId }) {
           return (
             <div key={sku.id} className="flex items-center gap-3 pl-16 pr-4 py-2.5 bg-red-500/5 border-b border-red-500/10 last:border-0">
               <AlertTriangle size={12} className="text-red-400 shrink-0" />
+              <SkuThumb url={sku.image_url} size={32} />
               <span className="flex-1 text-sm text-surface-200">{label}</span>
               <span className="text-red-400 font-mono font-bold text-base">{sku.stock}</span>
               <span className="text-xs text-surface-500">{a?.threshold !== undefined ? `/ 기준 ${a.threshold}` : ''}</span>
@@ -252,6 +255,7 @@ function SettingsTab({ categories, products, skusByProduct, alertsBySkuId, onAle
           return (
             <div key={sku.id} className={'flex items-center gap-2 pl-14 pr-4 py-2 border-b border-surface-800/10 last:border-0 ' + (isLow ? 'bg-red-500/5' : '')}>
               <Checkbox state={!!checked[sku.id]} onChange={() => setChecked(p => ({ ...p, [sku.id]: !p[sku.id] }))} />
+              <SkuThumb url={sku.image_url} size={32} />
               <span className="flex-1 text-sm text-surface-300">{label}</span>
               <span className={'text-xs font-mono font-bold w-8 text-right ' + (isLow ? 'text-red-400' : 'text-emerald-400')}>{sku.stock}</span>
               <span className="text-xs text-surface-600 w-6 text-center">→</span>
@@ -361,10 +365,10 @@ export default function StockAlertsPage() {
   async function loadAll() {
     setLoading(true)
     const [{ data: cats }, { data: prods }, { data: skus }, { data: alertData }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, category_id').eq('is_active', true).order('name'),
-      supabase.from('product_skus').select('id, stock, product_id, option1_id, option2_id').eq('is_active', true),
-      supabase.from('stock_alerts').select('*')
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, category_id').eq('is_active', true).order('name')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, option1_id, option2_id').eq('is_active', true)),
+      selectAll(() => supabase.from('stock_alerts').select('*'))
     ])
     setCategories(cats || [])
     setProducts(prods || [])
@@ -374,7 +378,7 @@ export default function StockAlertsPage() {
     ;(skus || []).forEach(s => { if (s.option1_id) allOptIds.add(s.option1_id); if (s.option2_id) allOptIds.add(s.option2_id) })
     let optMap = {}
     if (allOptIds.size > 0) {
-      const { data: optRows } = await supabase.from('product_options').select('id, option_name, option_value, sort_order').in('id', [...allOptIds])
+      const { data: optRows } = await selectAll(() => supabase.from('product_options').select('id, option_name, option_value, sort_order').in('id', [...allOptIds]))
       ;(optRows || []).forEach(o => { optMap[o.id] = o })
     }
 
