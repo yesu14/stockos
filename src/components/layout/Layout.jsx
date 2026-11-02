@@ -1,21 +1,22 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { THEMES } from '../../context/ThemeContext'
 import {
   LayoutDashboard, Package, Boxes, Shield, Menu as MenuIcon,
-  LogOut, X, Bell, BellRing, PanelLeftClose, PanelLeftOpen,
+  LogOut, X, Bell, PanelLeftClose, PanelLeftOpen,
   RotateCcw, ShoppingCart, ArrowDownCircle, ArrowUpCircle,
   Settings, Star, FileText, Bell as BellIcon, Tag, Layers,
-  Palette, BarChart2
+  Palette, BarChart2, MapPin
 } from 'lucide-react'
+import { selectAll, selectIn } from '../../lib/fetchAll'
 
 const ROLE_LABELS = { admin: '관리자', manager: '매니저', viewer: '일반사용자', pending: '승인대기' }
 const ICON_MAP = {
   LayoutDashboard, Package, Boxes, Shield,
   RotateCcw, ShoppingCart, ArrowDownCircle, ArrowUpCircle,
-  Settings, Star, FileText, Bell: BellIcon, Tag, Layers, BarChart2
+  Settings, Star, FileText, Bell: BellIcon, Tag, Layers, BarChart2, MapPin
 }
 function getIcon(name) { return ICON_MAP[name] || Package }
 
@@ -28,6 +29,7 @@ const FALLBACK_MENUS = [
   { id: 'f6', menu_key: 'returns',   label: '반품관리',  url: '/returns',   icon_name: 'RotateCcw',       required_role: 'manager', sort_order: 6 },
   { id: 'f7', menu_key: 'sales',     label: '오늘판매',  url: '/sales',     icon_name: 'ShoppingCart',    required_role: 'viewer',  sort_order: 7 },
   { id: 'f8', menu_key: 'charts',    label: '차트',      url: '/charts',    icon_name: 'BarChart2',       required_role: 'viewer',  sort_order: 8 },
+  { id: 'f9', menu_key: 'warehouse', label: '상품찾기',  url: '/warehouse', icon_name: 'MapPin',          required_role: 'viewer',  sort_order: 9 },
 ]
 const ROLE_LVL = { admin: 3, manager: 2, viewer: 1 }
 
@@ -133,7 +135,18 @@ export default function Layout() {
   })
   const [showThemePicker, setShowThemePicker] = useState(false)
 
-  useEffect(() => { loadAlertCount() }, [location.pathname])
+  // 알림 개수: 처음 한 번 + 1분 30초마다 + 탭으로 돌아올 때 + 페이지를 옮길 때(20초 안에 또 조회하지 않음)
+  // (예전에는 페이지를 옮길 때마다 DB 를 두 번씩 조회했음)
+  const lastAlertCheck = useRef(0)
+  const checkAlerts = () => { lastAlertCheck.current = Date.now(); loadAlertCount() }
+  useEffect(() => {
+    checkAlerts()
+    const tick = setInterval(() => { if (document.visibilityState === 'visible') checkAlerts() }, 90000)
+    const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - lastAlertCheck.current > 20000) checkAlerts() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { clearInterval(tick); document.removeEventListener('visibilitychange', onVis) }
+  }, []) // eslint-disable-line
+  useEffect(() => { if (Date.now() - lastAlertCheck.current > 20000) checkAlerts() }, [location.pathname]) // eslint-disable-line
   useEffect(() => { loadMenus() }, [])
   useEffect(() => { applyTheme(theme) }, [])
 
@@ -155,18 +168,18 @@ export default function Layout() {
 
   async function loadMenus() {
     try {
-      const { data } = await supabase.from('menus').select('*').eq('is_active', true).order('sort_order')
+      const { data } = await selectAll(() => supabase.from('menus').select('*').eq('is_active', true).order('sort_order'))
       setDbMenus(data && data.length > 0 ? data : null)
     } catch { setDbMenus(null) }
   }
 
   async function loadAlertCount() {
     try {
-      const { data: alerts } = await supabase.from('stock_alerts').select('product_sku_id, threshold').eq('is_active', true)
+      const { data: alerts } = await selectAll(() => supabase.from('stock_alerts').select('product_sku_id, threshold').eq('is_active', true))
       if (!alerts?.length) { setAlertCount(0); return }
       const skuIds = alerts.map(a => a.product_sku_id).filter(Boolean)
       if (!skuIds.length) { setAlertCount(0); return }
-      const { data: skus } = await supabase.from('product_skus').select('id, stock').in('id', skuIds).eq('is_active', true)
+      const { data: skus } = await selectIn(skuIds, __ids => supabase.from('product_skus').select('id, stock').in('id', __ids).eq('is_active', true))
       const stockMap = Object.fromEntries((skus || []).map(s => [s.id, s.stock]))
       setAlertCount(alerts.filter(a => (stockMap[a.product_sku_id] ?? 0) <= a.threshold).length)
     } catch { setAlertCount(0) }
@@ -187,36 +200,6 @@ export default function Layout() {
     ? [{ id: '_admin', label: '관리자', url: '/admin/users', icon_name: 'Shield', required_role: 'admin' }]
     : []
   const allMenus = [...visibleMenus, ...adminMenu]
-
-  // ── 테마 선택기 ──────────────────────────────────────────
-  function ThemePicker({ isMobile = false }) {
-    const isIconOnly = collapsed && !isMobile
-    return (
-      <div className="relative" data-theme-picker>
-        <button onClick={() => setShowThemePicker(p => !p)} title="테마 변경"
-          className={isIconOnly
-            ? 'flex items-center justify-center p-2.5 rounded-xl transition-colors text-surface-400 hover:bg-primary-500/10 hover:text-surface-50 w-full'
-            : 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors w-full text-surface-300 hover:bg-primary-500/10 hover:text-surface-50'}>
-          <Palette size={isIconOnly ? 18 : 17} className="shrink-0" />
-          {!isIconOnly && <>테마 변경<span className="ml-auto text-xs text-surface-500">{THEMES[theme]?.name || ''}</span></>}
-        </button>
-        {showThemePicker && (
-          <div className={`absolute ${isIconOnly ? 'left-full ml-2 bottom-0' : 'bottom-full left-0 mb-1'} w-52 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl z-50 p-1.5`}>
-            <p className="text-[10px] text-surface-500 px-2 py-1 font-medium uppercase tracking-wide">테마 선택</p>
-            {Object.entries(THEMES).map(([key, td]) => (
-              <button key={key} onClick={() => { setTheme(key); setShowThemePicker(false) }}
-                className={'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ' +
-                  (theme === key ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-surface-300 hover:bg-primary-500/10 hover:text-surface-50')}>
-                <div className="w-4 h-4 rounded-full border border-surface-600 shrink-0" style={{ background: td.primary }} />
-                {td.name}
-                {theme === key && <span className="ml-auto">✓</span>}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  }
 
   function SidebarContent({ onNav, isMobile = false }) {
     const isIconOnly = collapsed && !isMobile
@@ -371,7 +354,7 @@ export default function Layout() {
           <UserAvatar />
         </header>
         <main className="flex-1 overflow-y-auto relative">
-          <div className="p-4 md:p-6 max-w-7xl mx-auto animate-fade-in"><Outlet /></div>
+          <div className={'p-4 md:p-6 mx-auto animate-fade-in ' + (location.pathname.startsWith('/warehouse') ? 'max-w-[1800px]' : 'max-w-7xl')}><Suspense fallback={<div className="flex items-center justify-center py-24"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>}><Outlet /></Suspense></div>
         </main>
       </div>
     </div>

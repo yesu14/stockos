@@ -2,9 +2,11 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { Save, Search, GitBranch, Download, ChevronRight, ChevronDown, Package, Eye, X } from 'lucide-react'
-import ExcelJS from 'exceljs'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
+import { setStockExact } from '../../lib/stock'
 
 // ── 상세보기 + 재고수정 모달 ─────────────────────────────
 function SkuDetailModal({ product, onClose, onSaved, currentUser }) {
@@ -58,10 +60,12 @@ function SkuDetailModal({ product, onClose, onSaved, currentUser }) {
     if (!entries.length) return toast.error('수정할 재고를 입력하세요')
     setSaving(true)
     try {
+      const conflicts = []
       for (const [skuId, newStock] of entries) {
         const sku = skus.find(s => s.id === skuId)
         const optLabel = [sku?.o1?.option_value, sku?.o2?.option_value].filter(Boolean).join('/')
-        await supabase.from('product_skus').update({ stock: Number(newStock), updated_at: new Date().toISOString() }).eq('id', skuId)
+        try { await setStockExact(skuId, Number(newStock), sku?.stock ?? null) }      // 화면에서 본 값 그대로일 때만 바꿈
+        catch (e) { if (e.code === 'STOCK_CHANGED') { conflicts.push(`${optLabel || '옵션'}: ${e.message}`); continue } throw e }
         await supabase.from('stock_logs').insert({
           product_sku_id: skuId, change_type: 'manual',
           quantity_before: sku?.stock ?? 0,
@@ -73,6 +77,7 @@ function SkuDetailModal({ product, onClose, onSaved, currentUser }) {
           note: '수동 조정'
         })
       }
+      if (conflicts.length) { toast.error(conflicts[0] + (conflicts.length > 1 ? ` (외 ${conflicts.length - 1}건)` : '')); if (onSaved) onSaved(); return }
       toast.success(entries.length + '개 항목 저장 완료')
       setEdits({})
       if (onSaved) onSaved()
@@ -90,6 +95,7 @@ function SkuDetailModal({ product, onClose, onSaved, currentUser }) {
     const adj = edits[sku.id]
     return (
       <td key={cellKey} className="px-2 py-2">
+        <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
         <div className={"text-center text-xs mb-1 font-mono font-bold " + stockColor(sku.stock)}>
           재고 {sku.stock}
         </div>
@@ -209,16 +215,16 @@ export default function InventoryPage() {
   async function loadInventory() {
     setLoading(true)
     const [{ data: cats }, { data: prods }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select(`
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select(`
         id, name, image_url, storage_location_text, factory, category_id,
         categories(id, name),
         product_skus(
-          id, stock,
+          id, stock, image_url,
           o1:option1_id(option_name, option_value, sort_order),
           o2:option2_id(option_name, option_value, sort_order)
         )
-      `).eq('is_active', true).order('sort_order')
+      `).eq('is_active', true).order('sort_order'))
     ])
     setCategories(cats || [])
     setProducts(prods || [])
@@ -259,12 +265,14 @@ export default function InventoryPage() {
     if (!entries.length) return toast.error('수정할 재고를 입력하세요')
     setSaving(true)
     try {
+      const conflicts = []
       for (const [skuId, newStock] of entries) {
         const { data: sku } = await supabase.from('product_skus')
           .select('stock, o1:option1_id(option_value), o2:option2_id(option_value)')
           .eq('id', skuId).single()
         const optLabel = [sku.o1?.option_value, sku.o2?.option_value].filter(Boolean).join('/')
-        await supabase.from('product_skus').update({ stock: Number(newStock), updated_at: new Date().toISOString() }).eq('id', skuId)
+        try { await setStockExact(skuId, Number(newStock), sku.stock ?? null) }      // 읽은 값 그대로일 때만 바꿈
+        catch (e) { if (e.code === 'STOCK_CHANGED') { conflicts.push(`${optLabel || '옵션'}: ${e.message}`); continue } throw e }
         await supabase.from('stock_logs').insert({
           product_sku_id: skuId, change_type: 'manual',
           quantity_before: sku.stock, quantity_change: Number(newStock) - sku.stock,
@@ -272,6 +280,7 @@ export default function InventoryPage() {
           user_name: user?.email || '', created_by: user?.id || null, note: '수동 조정'
         })
       }
+      if (conflicts.length) { toast.error(conflicts[0] + (conflicts.length > 1 ? ` (외 ${conflicts.length - 1}건)` : '')); loadInventory(); return }
       toast.success(entries.length + '개 항목 저장 완료')
       setAdjustments({})
       loadInventory()
@@ -292,6 +301,7 @@ export default function InventoryPage() {
       const opt2Vals = [...opt2Map.values()].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
       const hasOpt2 = opt2Vals.length > 0
 
+      const ExcelJS = await import('exceljs').then(m => m.default || m)      // 엑셀 라이브러리(약 1MB)는 내려받을 때만 불러옴 → 앱이 처음 열리는 속도가 빨라짐
       const wb = new ExcelJS.Workbook()
       wb.creator = 'StockOS'
       const ws = wb.addWorksheet(product.name.replace(/[:/\\[\]*?]/g, '').slice(0, 31) || 'Sheet')
@@ -521,7 +531,7 @@ export default function InventoryPage() {
                             className={"border-b border-surface-800/20 " + (adj !== undefined && adj !== '' ? 'bg-primary-500/5' : 'hover:bg-surface-800/10')}>
                             <td className="px-4 py-2">
                               <div className="pl-16 text-surface-400 text-xs flex items-center gap-1.5">
-                                <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />
+                                <SkuThumb url={sku.image_url} size={28} />
                                 {label}
                               </div>
                             </td>

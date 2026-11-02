@@ -6,27 +6,29 @@ import { ThemeProvider } from './context/ThemeContext'
 import LoginPage from './pages/auth/LoginPage'
 import RegisterPage from './pages/auth/RegisterPage'
 import Layout from './components/layout/Layout'
-import Dashboard from './pages/dashboard/Dashboard'
-import ProductsPage from './pages/products/ProductsPage'
-import ProductFormPage from './pages/products/ProductFormPage'
-import InboundPage from './pages/inbound/InboundPage'
-import OutboundPage from './pages/outbound/OutboundPage'
-import InventoryPage from './pages/inventory/InventoryPage'
-import InventoryDetailPage from './pages/inventory/InventoryDetailPage'
-import StockLogsPage from './pages/inventory/StockLogsPage'
-import StockHistoryPage from './pages/inventory/StockHistoryPage'
-import SalesPage from './pages/sales/SalesPage'
-import SalesReportPage from './pages/sales/SalesReportPage'
-import FavoritesPage from './pages/sales/FavoritesPage'
-import FavoritesAddPage from './pages/sales/FavoritesAddPage'
-import SalesRecordsPage from './pages/sales/SalesRecordsPage'
-import ReturnsPage from './pages/returns/ReturnsPage'
-import ReturnSourcesPage from './pages/returns/ReturnSourcesPage'
-import SuppliersPage from './pages/suppliers/SuppliersPage'
-import AdminUsersPage from './pages/admin/AdminUsersPage'
-import AdminMenusPage from './pages/admin/AdminMenusPage'
-import ChartsPage from './pages/charts/ChartsPage'
-import StockAlertsPage from './pages/alerts/StockAlertsPage'
+import { Suspense } from 'react'
+import { lazyRetry } from './lib/lazyRetry'
+const Dashboard = lazyRetry(() => import('./pages/dashboard/Dashboard'))
+const ProductsPage = lazyRetry(() => import('./pages/products/ProductsPage'))
+const ProductFormPage = lazyRetry(() => import('./pages/products/ProductFormPage'))
+const InboundPage = lazyRetry(() => import('./pages/inbound/InboundPage'))
+const OutboundPage = lazyRetry(() => import('./pages/outbound/OutboundPage'))
+const InventoryPage = lazyRetry(() => import('./pages/inventory/InventoryPage'))
+const InventoryDetailPage = lazyRetry(() => import('./pages/inventory/InventoryDetailPage'))
+const StockLogsPage = lazyRetry(() => import('./pages/inventory/StockLogsPage'))
+const StockHistoryPage = lazyRetry(() => import('./pages/inventory/StockHistoryPage'))
+const SalesPage = lazyRetry(() => import('./pages/sales/SalesPage'))
+const FavoritesPage = lazyRetry(() => import('./pages/sales/FavoritesPage'))
+const FavoritesAddPage = lazyRetry(() => import('./pages/sales/FavoritesAddPage'))
+const SalesRecordsPage = lazyRetry(() => import('./pages/sales/SalesRecordsPage'))
+const ReturnsPage = lazyRetry(() => import('./pages/returns/ReturnsPage'))
+const ReturnSourcesPage = lazyRetry(() => import('./pages/returns/ReturnSourcesPage'))
+const SuppliersPage = lazyRetry(() => import('./pages/suppliers/SuppliersPage'))
+const AdminUsersPage = lazyRetry(() => import('./pages/admin/AdminUsersPage'))
+const AdminMenusPage = lazyRetry(() => import('./pages/admin/AdminMenusPage'))
+const ChartsPage = lazyRetry(() => import('./pages/charts/ChartsPage'))
+const WarehousePage = lazyRetry(() => import('./pages/warehouse/WarehousePage'))
+const StockAlertsPage = lazyRetry(() => import('./pages/alerts/StockAlertsPage'))
 
 function ProtectedRoute({ children, requiredRole }) {
   const { user, profile, loading } = useAuth()
@@ -51,6 +53,7 @@ export default function App() {
           <Toaster position="top-right" toastOptions={{
             style: { background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155' }
           }} />
+          <Suspense fallback={<div className="min-h-screen bg-surface-900 flex items-center justify-center"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"/></div>}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
@@ -81,13 +84,15 @@ export default function App() {
 
               {/* 오늘판매 */}
               <Route path="sales" element={<SalesPage />} />
-              <Route path="sales/report" element={<SalesReportPage />} />
               <Route path="sales/favorites" element={<FavoritesPage />} />
               <Route path="sales/favorites/add" element={<FavoritesAddPage />} />
               <Route path="sales/records" element={<SalesRecordsPage />} />
 
               {/* 차트 */}
               <Route path="charts" element={<ChartsPage />} />
+
+              {/* 상품찾기 (창고 박스 위치) */}
+              <Route path="warehouse" element={<WarehousePage />} />
 
               {/* 반품 */}
               <Route path="returns" element={<ProtectedRoute requiredRole="manager"><ReturnsPage /></ProtectedRoute>} />
@@ -100,6 +105,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
+          </Suspense>
         </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>

@@ -8,6 +8,7 @@ import {
   Package, AlertTriangle, ArrowDown, TrendingUp,
   ShoppingCart, RotateCcw, Boxes, RefreshCw
 } from 'lucide-react'
+import { selectAll } from '../../lib/fetchAll'
 
 const SALE_COLORS   = ['#0ea5e9','#38bdf8','#7dd3fc','#bae6fd','#93c5fd','#6ee7b7','#a5b4fc']
 const RETURN_COLORS = ['#f97316','#fb923c','#fdba74','#fcd34d','#fca5a5','#f87171','#ef4444']
@@ -52,24 +53,27 @@ export default function Dashboard() {
   }
 
   async function loadStats() {
-    const { count: activeProducts } = await supabase.from('products').select('*', { count:'exact', head:true }).eq('is_active', true)
-    const { data: skus } = await supabase.from('product_skus').select('id, stock, product_id').eq('is_active', true)
+    // 서로 상관없는 조회 5개를 동시에 (대시보드는 로그인 직후 첫 화면이라 체감이 큼)
+    const [{ count: activeProducts }, { data: skus }, { data: prods }, { data: alerts }, { count: inboundCount }] = await Promise.all([
+      supabase.from('products').select('*', { count:'exact', head:true }).eq('is_active', true),
+      selectAll(() => supabase.from('product_skus').select('id, stock, product_id').eq('is_active', true)),
+      selectAll(() => supabase.from('products').select('id, sale_price').eq('is_active', true)),
+      selectAll(() => supabase.from('stock_alerts').select('product_sku_id, threshold').eq('is_active', true)),
+      supabase.from('inbound_orders').select('*', { count:'exact', head:true }).eq('order_type','inbound'),
+    ])
     const totalStock = skus?.reduce((s, sk) => s + (sk.stock||0), 0) || 0
-    const { data: prods } = await supabase.from('products').select('id, sale_price').eq('is_active', true)
     const priceMap = Object.fromEntries((prods||[]).map(p=>[p.id, p.sale_price||0]))
     const totalValue = (skus||[]).reduce((s,sk) => s + (sk.stock||0)*(priceMap[sk.product_id]||0), 0)
-    const { data: alerts } = await supabase.from('stock_alerts').select('product_sku_id, threshold').eq('is_active', true)
     const stockMap = Object.fromEntries((skus||[]).map(s=>[s.id, s.stock||0]))
     const lowStock = (alerts||[]).filter(a => (stockMap[a.product_sku_id]??0) <= a.threshold).length
-    const { count: inboundCount } = await supabase.from('inbound_orders').select('*', { count:'exact', head:true }).eq('order_type','inbound')
     setStats({ activeProducts:activeProducts||0, totalSkus:skus?.length||0, lowStock, inboundCount:inboundCount||0, totalStock, totalValue })
   }
 
   async function loadSalesRank() {
     const from = new Date(Date.now() - parseInt(period)*86400000).toISOString().slice(0,10)
-    const { data } = await supabase.from('sales')
+    const { data } = await selectAll(() => supabase.from('sales')
       .select('quantity, product_sku_id, product_skus(products(name), o1:option1_id(option_value), o2:option2_id(option_value))')
-      .gte('sale_date', from)
+      .gte('sale_date', from))
     const map = {}
     ;(data||[]).forEach(s => {
       const pname = s.product_skus?.products?.name||'상품'
@@ -86,9 +90,9 @@ export default function Dashboard() {
 
   async function loadReturnRank() {
     const from = new Date(Date.now() - parseInt(period)*86400000).toISOString().slice(0,10)
-    const { data } = await supabase.from('return_orders')
+    const { data } = await selectAll(() => supabase.from('return_orders')
       .select('return_date, return_items(quantity, product_sku_id, product_skus(products(name), o1:option1_id(option_value), o2:option2_id(option_value)))')
-      .gte('return_date', from)
+      .gte('return_date', from))
     const map = {}
     ;(data||[]).forEach(order => {
       ;(order.return_items||[]).forEach(it => {
@@ -107,10 +111,10 @@ export default function Dashboard() {
 
   async function loadRevenueLine() {
     const from = new Date(Date.now() - parseInt(period)*86400000).toISOString().slice(0,10)
-    const { data } = await supabase.from('sales')
+    const { data } = await selectAll(() => supabase.from('sales')
       .select('sale_date, quantity, sale_price, margin')
       .gte('sale_date', from)
-      .order('sale_date')
+      .order('sale_date'))
     const map = {}
     ;(data||[]).forEach(s => {
       const d = s.sale_date

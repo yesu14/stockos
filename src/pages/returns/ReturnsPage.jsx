@@ -1,17 +1,16 @@
 import { useState, useEffect, useMemo } from 'react'
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
-  LineChart, Line, ResponsiveContainer, Legend
-} from 'recharts'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import {
   RotateCcw, Package, Search, ChevronDown, ChevronRight,
-  X, Trash2, Plus, Save, Pencil, ClipboardList, BarChart2,
+  X, Trash2, Plus, Save, Pencil, ClipboardList,
   Building2, Info, AlertTriangle
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import ReturnSourcesPage from './ReturnSourcesPage'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
+import { applyStockChanges, netStockChanges } from '../../lib/stock'
 
 function skuLabel(sku) {
   return [sku?.o1?.option_value, sku?.o2?.option_value].filter(Boolean).join(' / ') || 'Default'
@@ -84,6 +83,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                   const val = values[sku.id] ?? ''
                   return (
                     <td key={v2.option_value} className="px-2 py-2">
+                      <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                       <div className="text-center text-xs text-surface-500 mb-1">재고 {sku.stock}</div>
                       <input type="number" min="0" value={val} onFocus={e => { if (e.target.value === '0') e.target.value = '' }}
                         onChange={e => onChange(sku.id, e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
@@ -95,6 +95,7 @@ function StockGrid({ skus, values, onChange, bulkValue, onBulkChange, onBulkAppl
                   const val = values[sku.id] ?? ''
                   return (
                     <td key="single" className="px-2 py-2">
+                      <div className="flex justify-center mb-1"><SkuThumb url={sku.image_url} size={36} /></div>
                       <div className="text-center text-xs text-surface-500 mb-1">재고 {sku.stock}</div>
                       <input type="number" min="0" value={val} onFocus={e => { if (e.target.value === '0') e.target.value = '' }}
                         onChange={e => onChange(sku.id, e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
@@ -228,6 +229,7 @@ function ProductTreeSelector({ categories, products, skusByProduct, existingSkuI
                       return (
                         <div key={sku.id} className={'flex items-center gap-2 pl-12 pr-3 py-1.5 border-t border-surface-800/20 ' + (alreadyIn ? 'opacity-40' : '')}>
                           <Chk state={alreadyIn ? false : !!checked[sku.id]} onChange={() => toggleSku(sku.id)} />
+                          <SkuThumb url={sku.image_url} size={30} />
                           <span className="flex-1 text-xs text-surface-300">{skuLabel(sku)}</span>
                           <span className="text-xs text-surface-500 font-mono">재고 {sku.stock}</span>
                           {alreadyIn && <span className="text-xs text-rose-400/70">추가됨</span>}
@@ -371,6 +373,7 @@ function ReturnItemsTree({ items, onUpdateQty, onDeleteItems, categoryMap, produ
                         <div key={item.sku.id} className="grid grid-cols-[1fr_80px_80px_80px_32px] gap-0 pl-12 pr-3 py-2 border-t border-surface-800/20 hover:bg-surface-800/5 items-center">
                           <div className="flex items-center gap-2">
                             <Chk state={!!checked[item.sku.id]} onChange={() => setChecked(p => ({ ...p, [item.sku.id]: !p[item.sku.id] }))} />
+                            <SkuThumb url={item.sku.image_url} size={30} />
                             <span className="text-xs text-surface-300">{label}</span>
                           </div>
                           <div className="text-center text-xs font-mono text-surface-400">{item.currentStock}</div>
@@ -463,6 +466,8 @@ function ReturnInfoForm({ values, onChange, sources }) {
   )
 }
 
+const retEffect = t => (t === 'return_disposal' ? 0 : t === 'existing_disposal' ? -1 : 1)   // 폐기 방식이 재고에 미치는 영향: +1 늘림 / -1 줄임 / 0 변동 없음
+
 // ── 반품 저장 공통 로직 ───────────────────────────────────
 async function performReturnSave({ user, items, info, orderId = null }) {
   const validItems = items.filter(it => it.retQty > 0)
@@ -472,6 +477,18 @@ async function performReturnSave({ user, items, info, orderId = null }) {
   const orderNumber = orderId ? null : 'RET-' + Date.now().toString(36).toUpperCase()
   const totalQty = validItems.reduce((s, it) => s + it.retQty, 0)
   const disposalType = info.disposalType || null
+
+  // 수정이면, 이미 재고에 반영된 원래 반품 내용(항목 + 폐기 방식)을 먼저 읽어 둔다 → 재고에는 "차이"만 반영 (예전엔 수정할 때마다 전체 수량이 또 더해졌음)
+  let origItems = [], origType = null
+  if (orderId) {
+    const [{ data: oi }, { data: od }] = await Promise.all([
+      selectAll(() => supabase.from('return_items')
+        .select('product_sku_id, quantity, product_skus(o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
+        .eq('return_order_id', orderId)),
+      supabase.from('return_orders').select('disposal_type').eq('id', orderId).single(),
+    ])
+    origItems = oi || []; origType = od?.disposal_type || null
+  }
 
   let order
   if (orderId) {
@@ -499,29 +516,23 @@ async function performReturnSave({ user, items, info, orderId = null }) {
     order = data
   }
 
-  for (const item of validItems) {
-    await supabase.from('return_items').insert({ return_order_id: order.id, product_sku_id: item.sku.id, quantity: item.retQty, final_stock: item.finalStock })
-
-    if (disposalType === 'return_disposal') {
-      // 재고/재고이력 변동 없음 - 폐기이력만 추가
-      await supabase.from('disposal_logs').insert({ return_order_id: order.id, product_sku_id: item.sku.id, quantity: item.retQty, disposal_type: 'return_disposal', note: `반품상품폐기 ${order.order_number || orderId}`, created_by: user.id })
-    } else if (disposalType === 'existing_disposal') {
-      // 재고 -1 (각 옵션마다)
-      const { data: freshSku } = await supabase.from('product_skus').select('stock').eq('id', item.sku.id).single()
-      const curStock = freshSku?.stock || 0
-      const newStock = curStock - item.retQty
-      await supabase.from('product_skus').update({ stock: newStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
-      await supabase.from('stock_logs').insert({ product_sku_id: item.sku.id, change_type: 'return', quantity_before: curStock, quantity_change: -item.retQty, quantity_after: newStock, option_label: skuLabel(item.sku), user_name: user?.email || '', created_by: user.id, note: '기존상품폐기 ' + (order.order_number || orderId) })
-      await supabase.from('disposal_logs').insert({ return_order_id: order.id, product_sku_id: item.sku.id, quantity: item.retQty, disposal_type: 'existing_disposal', note: `기존상품폐기 ${order.order_number || orderId}`, created_by: user.id })
-    } else {
-      // 일반 반품: 재고 증가
-      const { data: freshSku } = await supabase.from('product_skus').select('stock').eq('id', item.sku.id).single()
-      const curStock = freshSku?.stock || 0
-      const newStock = curStock + item.retQty
-      await supabase.from('product_skus').update({ stock: newStock, updated_at: new Date().toISOString() }).eq('id', item.sku.id)
-      await supabase.from('stock_logs').insert({ product_sku_id: item.sku.id, change_type: 'return', quantity_before: curStock, quantity_change: item.retQty, quantity_after: newStock, option_label: skuLabel(item.sku), user_name: user?.email || '', created_by: user.id, note: '반품 ' + (order.order_number || orderId) })
-    }
+  let stockRes
+  try {
+    stockRes = await applyStockChanges(netStockChanges(
+      origItems.map(o => ({ skuId: o.product_sku_id, qty: o.quantity, effect: retEffect(origType) })),
+      validItems.map(it => ({ skuId: it.sku.id, qty: it.retQty, effect: retEffect(disposalType) }))), { allowNegative: true })   // 반품 흐름은 기존에도 마이너스를 허용했음
+  } catch (e) { if (!orderId) await supabase.from('return_orders').delete().eq('id', order.id); throw e }
+  const resBy = Object.fromEntries(stockRes.map(r => [r.skuId, r]))
+  const labelBy = Object.fromEntries(origItems.map(o => [o.product_sku_id, skuLabel(o.product_skus || {})]))
+  await supabase.from('return_items').insert(validItems.map(item => ({ return_order_id: order.id, product_sku_id: item.sku.id, quantity: item.retQty, final_stock: resBy[item.sku.id]?.after ?? item.finalStock })))
+  if (disposalType === 'return_disposal' || disposalType === 'existing_disposal') {      // 폐기 이력
+    const label = disposalType === 'return_disposal' ? '반품상품폐기 ' : '기존상품폐기 '
+    await supabase.from('disposal_logs').insert(validItems.map(item => ({ return_order_id: order.id, product_sku_id: item.sku.id, quantity: item.retQty, disposal_type: disposalType, note: `${label}${order.order_number || orderId}`, created_by: user.id })))
   }
+  if (stockRes.length) await supabase.from('stock_logs').insert(stockRes.map(r => ({      // 재고 이력: 실제로 바뀐 것만 (신규=전체 수량, 수정=차이)
+    product_sku_id: r.skuId, change_type: 'return', quantity_before: r.before, quantity_change: r.after - r.before, quantity_after: r.after,
+    option_label: labelBy[r.skuId] ?? skuLabel(validItems.find(it => it.sku.id === r.skuId)?.sku || {}), user_name: user?.email || '', created_by: user.id,
+    note: (disposalType === 'existing_disposal' ? '기존상품폐기 ' : '반품 ') + (orderId ? '(수정) ' : '') + (order.order_number || orderId) })))
   return order.order_number || orderId
 }
 
@@ -608,9 +619,9 @@ function EditReturn({ categories, products, skusByProduct, sources, onDone }) {
 
   async function loadOrders() {
     setLoading(true)
-    const { data } = await supabase.from('return_orders')
-      .select('id, order_number, return_date, total_quantity, return_source_id, customer_name, shipping_cost, note, disposal_type, created_at, return_sources(name), return_items(quantity, product_sku_id, product_skus(products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
-      .order('return_date', { ascending: false }).order('created_at', { ascending: false })
+    const { data } = await selectAll(() => supabase.from('return_orders')
+      .select('id, order_number, return_date, total_quantity, return_source_id, customer_name, shipping_cost, note, disposal_type, created_at, return_sources(name), return_items(quantity, product_sku_id, product_skus(image_url, products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
+      .order('return_date', { ascending: false }).order('created_at', { ascending: false }))
     setOrders(data || [])
     setLoading(false)
   }
@@ -619,14 +630,14 @@ function EditReturn({ categories, products, skusByProduct, sources, onDone }) {
     setSelectedOrder(order)
     setInfo({ sourceId: order.return_source_id || '', returnDate: order.return_date || '', customerName: order.customer_name || '', shippingCost: order.shipping_cost ? String(order.shipping_cost) : '', note: order.note || '', disposalType: order.disposal_type || null, orderNumber: order.order_number })
     setLoadingItems(true); setAddingProduct(false)
-    const { data } = await supabase.from('return_items')
-      .select('id, quantity, final_stock, product_sku_id, product_skus(stock, products(id, name, category_id), o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
-      .eq('return_order_id', order.id)
+    const { data } = await selectAll(() => supabase.from('return_items')
+      .select('id, quantity, final_stock, product_sku_id, product_skus(image_url, stock, products(id, name, category_id), o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))')
+      .eq('return_order_id', order.id))
     setOrderItems((data || []).map(it => ({
       id: it.id, product: it.product_skus?.products || {},
       catId: it.product_skus?.products?.category_id || '__none__',
-      sku: { id: it.product_sku_id, stock: it.product_skus?.stock || 0, o1: it.product_skus?.o1, o2: it.product_skus?.o2 },
-      currentStock: it.product_skus?.stock || 0, retQty: it.quantity || 0, finalStock: it.final_stock || 0
+      sku: { id: it.product_sku_id, stock: it.product_skus?.stock || 0, image_url: it.product_skus?.image_url, o1: it.product_skus?.o1, o2: it.product_skus?.o2 },
+      currentStock: it.product_skus?.stock || 0, retQty: it.quantity || 0, origQty: it.quantity || 0, finalStock: it.product_skus?.stock || 0
     })))
     setLoadingItems(false)
   }
@@ -639,7 +650,7 @@ function EditReturn({ categories, products, skusByProduct, sources, onDone }) {
     const toAdd = newItems.filter(ni => !existingSkuIds.has(ni.sku.id))
     if (toAdd.length) setOrderItems(p => [...p, ...toAdd])
   }
-  function updateQty(skuId, qty) { setOrderItems(p => p.map(it => it.sku.id === skuId ? { ...it, retQty: qty, finalStock: it.currentStock + qty } : it)) }
+  function updateQty(skuId, qty) { const eN = retEffect(info.disposalType), eO = retEffect(selectedOrder?.disposal_type); setOrderItems(p => p.map(it => it.sku.id === skuId ? { ...it, retQty: qty, finalStock: it.currentStock + eN * qty - eO * (it.origQty || 0) } : it)) }
   function deleteItems(skuIds) { const s = new Set(skuIds); setOrderItems(p => p.filter(it => !s.has(it.sku.id))) }
 
   async function saveOrder() {
@@ -656,15 +667,10 @@ function EditReturn({ categories, products, skusByProduct, sources, onDone }) {
     if (!confirm('반품을 삭제하시겠습니까?')) return
     setDeleting(p => new Set([...p, id]))
     try {
-      const { data: its } = await supabase.from('return_items').select('product_sku_id, quantity').eq('return_order_id', id)
+      const { data: its } = await selectAll(() => supabase.from('return_items').select('product_sku_id, quantity').eq('return_order_id', id))
       const { data: orderData } = await supabase.from('return_orders').select('disposal_type').eq('id', id).single()
-      for (const it of (its || [])) {
-        if (!orderData?.disposal_type || orderData.disposal_type === 'existing_disposal') {
-          const { data: sku } = await supabase.from('product_skus').select('stock').eq('id', it.product_sku_id).single()
-          const adj = orderData?.disposal_type === 'existing_disposal' ? it.quantity : -it.quantity
-          await supabase.from('product_skus').update({ stock: (sku?.stock || 0) + adj }).eq('id', it.product_sku_id)
-        }
-      }
+      const eff = retEffect(orderData?.disposal_type)          // 일반 반품: 재고에서 다시 빼고, 기존상품폐기: 재고를 다시 돌려놓음, 반품상품폐기: 변동 없음
+      if (eff !== 0) await applyStockChanges((its || []).map(it => ({ skuId: it.product_sku_id, delta: -eff * it.quantity })), { allowNegative: true })
       await supabase.from('return_items').delete().eq('return_order_id', id)
       await supabase.from('disposal_logs').delete().eq('return_order_id', id)
       await supabase.from('return_orders').delete().eq('id', id)
@@ -823,7 +829,7 @@ function EditReturn({ categories, products, skusByProduct, sources, onDone }) {
                                     <td />
                                     <td className="px-2 py-1.5 pl-16">
                                       <div className="flex items-center gap-1.5 text-xs text-surface-400">
-                                        <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />
+                                        <SkuThumb url={it.product_skus?.image_url} size={26} />
                                         {opt}
                                       </div>
                                     </td>
@@ -918,11 +924,13 @@ function ReturnHistory() {
 
   async function load() {
     setLoading(true)
-    let q = supabase.from('return_orders')
-      .select('id, order_number, return_date, total_quantity, disposal_type, customer_name, return_sources(name), return_items(quantity, product_sku_id, product_skus(products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
-      .order('return_date', { ascending: false }).order('created_at', { ascending: false })
-    if (yearFilter) q = q.gte('return_date', `${yearFilter}-01-01`).lte('return_date', `${yearFilter}-12-31`)
-    const { data } = await q
+    const { data } = await selectAll(() => {
+      let q = supabase.from('return_orders')
+        .select('id, order_number, return_date, total_quantity, disposal_type, customer_name, return_sources(name), return_items(quantity, product_sku_id, product_skus(image_url, products(id, name), o1:option1_id(option_value), o2:option2_id(option_value)))')
+        .order('return_date', { ascending: false }).order('created_at', { ascending: false })
+      if (yearFilter) q = q.gte('return_date', `${yearFilter}-01-01`).lte('return_date', `${yearFilter}-12-31`)
+      return q
+    })
     setRecords(data || [])
     setLoading(false)
   }
@@ -1046,7 +1054,7 @@ function ReturnHistory() {
                               <tr key={`i-${it.product_sku_id}`} className="border-b border-surface-800/10 hover:bg-surface-800/5">
                                 <td className="px-4 py-1.5 pl-20">
                                   <div className="flex items-center gap-1.5 text-xs text-surface-400">
-                                    <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" />
+                                    <SkuThumb url={it.product_skus?.image_url} size={26} />
                                     {opt}
                                   </div>
                                 </td>
@@ -1093,10 +1101,10 @@ export default function ReturnsPage() {
   async function loadBase() {
     setLoading(true)
     const [{ data: cats }, { data: prods }, { data: skus }, { data: srcs }] = await Promise.all([
-      supabase.from('categories').select('id, name').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, category_id').eq('is_active', true).order('sort_order'),
-      supabase.from('product_skus').select('id, stock, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true),
-      supabase.from('return_sources').select('*').order('name')
+      selectAll(() => supabase.from('categories').select('id, name').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, category_id').eq('is_active', true).order('sort_order')),
+      selectAll(() => supabase.from('product_skus').select('id, stock, image_url, product_id, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order)').eq('is_active', true)),
+      selectAll(() => supabase.from('return_sources').select('*').order('name'))
     ])
     setCategories(cats || [])
     setProducts(prods || [])

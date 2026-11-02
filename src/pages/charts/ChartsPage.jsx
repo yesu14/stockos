@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
+import SkuThumb from '../../components/ui/SkuThumb'
 import {
   BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, LineChart, Line, Legend
+  ResponsiveContainer
 } from 'recharts'
 import {
   TrendingUp, RotateCcw, ArrowDownCircle, ArrowUpCircle,
-  ChevronDown, ChevronRight, Calendar, Search, CheckSquare
+  ChevronDown, ChevronRight, Calendar
 } from 'lucide-react'
+import { selectAll } from '../../lib/fetchAll'
 
 // ════════════════════════════════════════════════════════
 // 공통 컴포넌트
@@ -123,65 +125,8 @@ function TreeFilter({ tree, checkedSkus, onToggle, accent = 'accent-primary-500'
   )
 }
 
-// 뷰 탭 + 서브 필터 공통
-function ViewTabs({ viewBy, setViewBy, dbYears, yearFilter, setYearFilter, monthFilter, setMonthFilter, rangeFrom, setRangeFrom, rangeTo, setRangeTo, accent = 'bg-primary-500', extra }) {
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2 items-center">
-        <div className="flex gap-1 bg-surface-800 rounded-xl p-1">
-          {[['month','월별'],['range','기간별'],['year','년도별']].map(([v,l]) => (
-            <button key={v} onClick={() => setViewBy(v)}
-              className={'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ' +
-                (viewBy === v ? `${accent} text-white` : 'text-surface-400 hover:text-white')}>
-              {l}
-            </button>
-          ))}
-        </div>
-        {extra}
-      </div>
-      <div className="flex flex-wrap gap-2 items-center">
-        {viewBy === 'month' && (<>
-          <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
-            className="bg-surface-800 border border-surface-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none">
-            <option value="">전체 연도</option>
-            {dbYears.map(y => <option key={y} value={y}>{y}년</option>)}
-          </select>
-          <div className="flex flex-wrap gap-1">
-            {Array.from({length:12},(_,i)=>i+1).map(m => {
-              const mm = String(m).padStart(2,'0')
-              return (
-                <button key={m} onClick={() => setMonthFilter(monthFilter === mm ? '' : mm)}
-                  className={'px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ' +
-                    (monthFilter === mm ? `${accent} text-white` : 'bg-surface-800 text-surface-400 hover:text-white')}>
-                  {m}월
-                </button>
-              )
-            })}
-          </div>
-        </>)}
-        {viewBy === 'range' && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <input type="date" value={rangeFrom} onChange={e => setRangeFrom(e.target.value)}
-              className="bg-surface-800 border border-surface-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none" />
-            <span className="text-surface-500 text-xs">~</span>
-            <input type="date" value={rangeTo} onChange={e => setRangeTo(e.target.value)}
-              className="bg-surface-800 border border-surface-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none" />
-          </div>
-        )}
-        {viewBy === 'year' && (
-          <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
-            className="bg-surface-800 border border-surface-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none">
-            <option value="">전체 연도</option>
-            {dbYears.map(y => <option key={y} value={y}>{y}년</option>)}
-          </select>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ════════════════════════════════════════════════════════
-// 판매 차트 (SalesReportPage 로직 통합)
+// 판매 차트
 // ════════════════════════════════════════════════════════
 function SalesChart() {
   const [mode, setMode]               = useState('today')
@@ -218,9 +163,9 @@ function SalesChart() {
     const r = getRange()
     if (!r?.from || !r?.to) return
     setLoading(true)
-    const { data } = await supabase.from('sales')
-      .select('id, sale_date, quantity, sale_price, margin, product_sku_id, product_skus(products(id, name, category_id, categories(name)), o1:option1_id(option_value), o2:option2_id(option_value))')
-      .gte('sale_date', r.from).lte('sale_date', r.to).order('sale_date')
+    const { data } = await selectAll(() => supabase.from('sales')
+      .select('id, sale_date, quantity, sale_price, margin, product_sku_id, product_skus(image_url, products(id, name, category_id, categories(name)), o1:option1_id(option_value), o2:option2_id(option_value))')
+      .gte('sale_date', r.from).lte('sale_date', r.to).order('sale_date'))
     setRawSales(data || [])
     // 트리 빌드
     const tree = {}
@@ -279,7 +224,7 @@ function SalesChart() {
       const o1 = s.product_skus?.o1?.option_value, o2 = s.product_skus?.o2?.option_value
       const optPart = [o1, o2].filter(Boolean).join('/')
       const key = s.product_sku_id
-      if (!map[key]) map[key] = { prodName: pname, optPart, qty: 0, revenue: 0, profit: 0 }
+      if (!map[key]) map[key] = { prodName: pname, optPart, imageUrl: s.product_skus?.image_url, qty: 0, revenue: 0, profit: 0 }
       map[key].qty += s.quantity || 0
       map[key].revenue += (s.sale_price||0) * (s.quantity||0)
       map[key].profit  += (s.margin||0) * (s.quantity||0)
@@ -388,7 +333,7 @@ function SalesChart() {
                       <tr key={idx} className="hover:bg-surface-800/20">
                         <td className="px-3 py-2 text-xs text-surface-600 text-center">{idx+1}</td>
                         <td className="px-3 py-2 text-sm font-medium text-white">{row.prodName}</td>
-                        <td className="px-3 py-2 text-xs text-surface-400">{row.optPart||'-'}</td>
+                        <td className="px-3 py-2 text-xs text-surface-400"><div className="flex items-center gap-2"><SkuThumb url={row.imageUrl} size={28} />{row.optPart || '-'}</div></td>
                         <td className="px-3 py-2 text-center"><span className="px-2 py-0.5 bg-primary-500/15 text-primary-400 rounded-lg text-xs font-bold">{row.qty}개</span></td>
                         <td className="px-3 py-2 text-right text-surface-200 font-mono text-xs">₩{row.revenue.toLocaleString()}</td>
                         <td className="px-3 py-2 text-right text-emerald-400 font-mono text-xs">₩{row.profit.toLocaleString()}</td>
@@ -437,10 +382,10 @@ function InboundChart() {
   async function loadAll() {
     setLoading(true)
     // 전체 입고 아이템 (날짜 포함)
-    const { data } = await supabase.from('inbound_items')
-      .select('id, quantity, inbound_order_id, product_sku_id, inbound_orders!inner(inbound_date, order_type), product_skus(product_id, products(id, name, category_id, categories(name)), o1:option1_id(option_value), o2:option2_id(option_value))')
+    const { data } = await selectAll(() => supabase.from('inbound_items')
+      .select('id, quantity, inbound_order_id, product_sku_id, inbound_orders!inner(inbound_date, order_type), product_skus(product_id, image_url, products(id, name, category_id, categories(name)), o1:option1_id(option_value), o2:option2_id(option_value))')
       .eq('inbound_orders.order_type', 'inbound')
-      .order('inbound_orders(inbound_date)')
+      .order('inbound_orders(inbound_date)'))
     const items = (data || []).map(it => ({
       id: it.id,
       qty: it.quantity || 0,
@@ -452,6 +397,7 @@ function InboundChart() {
       catName: it.product_skus?.products?.categories?.name || '미분류',
       o1: it.product_skus?.o1?.option_value,
       o2: it.product_skus?.o2?.option_value,
+      imageUrl: it.product_skus?.image_url,
     }))
     setRawItems(items)
 
@@ -544,7 +490,7 @@ function InboundChart() {
     dateFiltered.forEach(it => {
       const optPart = [it.o1, it.o2].filter(Boolean).join('/')
       const key = `${it.skuId}`
-      if (!map[key]) map[key] = { prodName: it.prodName, catName: it.catName, optPart, qty: 0 }
+      if (!map[key]) map[key] = { prodName: it.prodName, catName: it.catName, optPart, imageUrl: it.imageUrl, qty: 0 }
       map[key].qty += it.qty
     })
     return Object.values(map).sort((a,b) => b.qty-a.qty)
@@ -738,7 +684,7 @@ function InboundChart() {
                     <td className="px-4 py-2.5 text-xs text-surface-600 text-center">{idx+1}</td>
                     <td className="px-4 py-2.5 text-xs text-surface-500">{row.catName}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-white">{row.prodName}</td>
-                    <td className="px-4 py-2.5 text-xs text-surface-400">{row.optPart || '-'}</td>
+                    <td className="px-4 py-2.5 text-xs text-surface-400"><div className="flex items-center gap-2"><SkuThumb url={row.imageUrl} size={28} />{row.optPart || '-'}</div></td>
                     <td className="px-4 py-2.5 text-center">
                       <span className="px-2 py-0.5 bg-primary-500/15 text-primary-400 rounded-lg text-xs font-bold font-mono">{row.qty}개</span>
                     </td>
@@ -763,7 +709,6 @@ function InboundChart() {
 
 function OutboundChart() {
   const [suppliers, setSuppliers] = useState([])
-  const supplierMap = Object.fromEntries(suppliers.map(s=>[s.id,s.name]))
 
   // ── 데이터 상태 ──
   const [rawItems, setRawItems] = useState([])
@@ -788,12 +733,12 @@ function OutboundChart() {
 
   async function loadAll() {
     setLoading(true)
-    const { data: suppData } = await supabase.from('suppliers').select('id, name').order('name')
+    const { data: suppData } = await selectAll(() => supabase.from('suppliers').select('id, name').order('name'))
     setSuppliers(suppData || [])
-    const { data } = await supabase.from('inbound_items')
-      .select('id, quantity, inbound_order_id, product_sku_id, inbound_orders!inner(inbound_date, order_type, supplier_id, tax_paid), product_skus(product_id, products(id, name, category_id, categories(name)), o1:option1_id(option_value), o2:option2_id(option_value))')
+    const { data } = await selectAll(() => supabase.from('inbound_items')
+      .select('id, quantity, inbound_order_id, product_sku_id, inbound_orders!inner(inbound_date, order_type, supplier_id, tax_paid), product_skus(product_id, image_url, products(id, name, category_id, categories(name)), o1:option1_id(option_value), o2:option2_id(option_value))')
       .eq('inbound_orders.order_type', 'outbound')
-      .order('inbound_orders(inbound_date)')
+      .order('inbound_orders(inbound_date)'))
     const items = (data || []).map(it => ({
       id: it.id,
       qty: it.quantity || 0,
@@ -808,6 +753,7 @@ function OutboundChart() {
       catName: it.product_skus?.products?.categories?.name || '미분류',
       o1: it.product_skus?.o1?.option_value,
       o2: it.product_skus?.o2?.option_value,
+      imageUrl: it.product_skus?.image_url,
     }))
     setRawItems(items)
 
@@ -882,7 +828,7 @@ function OutboundChart() {
     dateFiltered.forEach(it => {
       const optPart=[it.o1,it.o2].filter(Boolean).join('/')
       const key=`${it.skuId}`
-      if (!map[key]) map[key]={prodName:it.prodName,catName:it.catName,optPart,qty:0}
+      if (!map[key]) map[key]={prodName:it.prodName,catName:it.catName,optPart,imageUrl:it.imageUrl,qty:0}
       map[key].qty += it.qty
     })
     return Object.values(map).sort((a,b)=>b.qty-a.qty)
@@ -1079,7 +1025,7 @@ function OutboundChart() {
                     <td className="px-4 py-2.5 text-xs text-surface-600 text-center">{idx+1}</td>
                     <td className="px-4 py-2.5 text-xs text-surface-500">{row.catName}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-white">{row.prodName}</td>
-                    <td className="px-4 py-2.5 text-xs text-surface-400">{row.optPart||'-'}</td>
+                    <td className="px-4 py-2.5 text-xs text-surface-400"><div className="flex items-center gap-2"><SkuThumb url={row.imageUrl} size={28} />{row.optPart || '-'}</div></td>
                     <td className="px-4 py-2.5 text-center">
                       <span className="px-2 py-0.5 bg-orange-500/15 text-orange-400 rounded-lg text-xs font-bold font-mono">{row.qty}개</span>
                     </td>
@@ -1124,27 +1070,28 @@ function ReturnStats() {
     setLoading(true)
     try {
       // 반품처 목록
-      const { data: srcs } = await supabase
-        .from('return_sources').select('id, name').order('name')
+      const { data: srcs } = await selectAll(() => supabase
+        .from('return_sources').select('id, name').order('name'))
       setReturnSources(srcs || [])
 
       // return_orders 먼저 (FK 조인 정렬 문제 우회)
-      const { data: orders } = await supabase
+      const { data: orders } = await selectAll(() => supabase
         .from('return_orders')
         .select('id, return_date, return_source_id')
-        .order('return_date')
+        .order('return_date'))
       const orderMap = Object.fromEntries((orders || []).map(o => [o.id, o]))
 
       // return_items
-      const { data, error } = await supabase
+      const { data, error } = await selectAll(() => supabase
         .from('return_items')
         .select(`id, quantity, return_order_id,
           product_skus(
             product_id,
+            image_url,
             products(id, name, category_id, categories(name)),
             o1:option1_id(option_value),
             o2:option2_id(option_value)
-          )`)
+          )`))
       if (error) throw error
 
       const items = (data || []).map(it => {
@@ -1167,6 +1114,7 @@ function ReturnStats() {
           catName: prod.categories?.name || '미분류',
           o1: o1v,
           o2: o2v,
+          imageUrl: sku.image_url,
         }
       }).filter(it => it.date)
 
@@ -1262,7 +1210,7 @@ function ReturnStats() {
     dateFiltered.forEach(it => {
       if (!map[it.skuId]) map[it.skuId] = {
         prodName: it.prodName, catName: it.catName,
-        optPart: [it.o1, it.o2].filter(Boolean).join('/'), qty: 0
+        optPart: [it.o1, it.o2].filter(Boolean).join('/'), imageUrl: it.imageUrl, qty: 0
       }
       map[it.skuId].qty += it.qty
     })
@@ -1477,7 +1425,7 @@ function ReturnStats() {
                     <td className="px-4 py-2.5 text-xs text-surface-600 text-center">{idx + 1}</td>
                     <td className="px-4 py-2.5 text-xs text-surface-500">{row.catName}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-white">{row.prodName}</td>
-                    <td className="px-4 py-2.5 text-xs text-surface-400">{row.optPart || '-'}</td>
+                    <td className="px-4 py-2.5 text-xs text-surface-400"><div className="flex items-center gap-2"><SkuThumb url={row.imageUrl} size={28} />{row.optPart || '-'}</div></td>
                     <td className="px-4 py-2.5 text-center">
                       <span className="px-2 py-0.5 bg-rose-500/15 text-rose-400 rounded-lg text-xs font-bold font-mono">
                         {row.qty}개
@@ -1513,7 +1461,6 @@ const CHART_TABS = [
 
 export default function ChartsPage() {
   const [tab, setTab] = useState('sales')
-  const current = CHART_TABS.find(t => t.key === tab)
 
   return (
     <div className="space-y-5 max-w-7xl">

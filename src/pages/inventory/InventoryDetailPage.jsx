@@ -4,6 +4,9 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { ChevronLeft, Save, X, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
+import { setStockExact } from '../../lib/stock'
 
 export default function InventoryDetailPage() {
   const { id } = useParams()
@@ -28,18 +31,19 @@ export default function InventoryDetailPage() {
 
   async function loadData() {
     setLoading(true)
-    const { data: p } = await supabase.from('products').select('*, categories(name), subcategories(name)').eq('id', id).single()
+    // 서로 상관없는 조회 3개를 동시에 (하나씩 기다리면 3배 느림)
+    const [{ data: p }, { data: optData }, { data: skuData }] = await Promise.all([
+      supabase.from('products').select('*, categories(name), subcategories(name)').eq('id', id).single(),
+      // sort_order로 옵션 입력 순서 보존
+      selectAll(() => supabase.from('product_options')
+        .select('id, option_number, option_name, option_value, sort_order')
+        .eq('product_id', id)
+        .order('option_number').order('sort_order')),
+      selectAll(() => supabase.from('product_skus').select(
+        'id, stock, image_url, o1:option1_id(id, option_name, option_value, sort_order), o2:option2_id(id, option_name, option_value, sort_order)'
+      ).eq('product_id', id).eq('is_active', true)),
+    ])
     setProduct(p)
-
-    // sort_order로 옵션 입력 순서 보존
-    const { data: optData } = await supabase.from('product_options')
-      .select('id, option_number, option_name, option_value, sort_order')
-      .eq('product_id', id)
-      .order('option_number').order('sort_order')
-
-    const { data: skuData } = await supabase.from('product_skus').select(
-      'id, stock, o1:option1_id(id, option_name, option_value, sort_order), o2:option2_id(id, option_name, option_value, sort_order)'
-    ).eq('product_id', id).eq('is_active', true)
 
     setSkus(skuData || [])
     const init = {}
@@ -63,7 +67,7 @@ export default function InventoryDetailPage() {
       .filter(s => editedStocks[s.id] !== undefined && Number(editedStocks[s.id]) !== s.stock)
       .map(s => {
         const label = [s.o1?.option_value, s.o2?.option_value].filter(Boolean).join('/')
-        return { skuId: s.id, label, before: s.stock, after: Number(editedStocks[s.id]) }
+        return { skuId: s.id, label, image_url: s.image_url, before: s.stock, after: Number(editedStocks[s.id]) }
       })
   }
 
@@ -76,9 +80,11 @@ export default function InventoryDetailPage() {
   async function confirmSave(finalChanges) {
     setSaving(true)
     try {
+      const conflicts = []
       for (const ch of finalChanges) {
         const sku = skus.find(s => s.id === ch.skuId)
-        await supabase.from('product_skus').update({ stock: ch.after, updated_at: new Date().toISOString() }).eq('id', ch.skuId)
+        try { await setStockExact(ch.skuId, ch.after, ch.before) }      // 화면에서 본 값 그대로일 때만 바꿈 (그 사이 다른 곳에서 바뀌었으면 덮어쓰지 않음)
+        catch (e) { if (e.code === 'STOCK_CHANGED') { conflicts.push(`${ch.label || '옵션'}: ${e.message}`); continue } throw e }
         await supabase.from('stock_logs').insert({
           product_sku_id: ch.skuId, change_type: 'manual',
           quantity_before: ch.before, quantity_change: ch.after - ch.before, quantity_after: ch.after,
@@ -86,6 +92,7 @@ export default function InventoryDetailPage() {
           user_name: user?.email || '', created_by: user?.id, note: '상세보기 수동 조정'
         })
       }
+      if (conflicts.length) { toast.error(conflicts[0] + (conflicts.length > 1 ? ` (외 ${conflicts.length - 1}건)` : '')); setShowConfirm(false); loadData(); return }
       toast.success('저장 완료'); setShowConfirm(false); loadData()
     } catch (err) { toast.error(err.message) }
     finally { setSaving(false) }
@@ -158,6 +165,7 @@ export default function InventoryDetailPage() {
                         const changed = Number(editedStocks[sku.id]) !== sku.stock
                         return (
                           <td key={v2} className="px-4 py-3 text-center">
+                            <div className="flex justify-center mb-1.5"><SkuThumb url={sku.image_url} size={40} /></div>
                             <input type="number" min="0"
                               value={editedStocks[sku.id] ?? sku.stock}
                               onChange={e => { const v = e.target.value.replace(/[^0-9]/g,''); setEditedStocks(p => ({...p,[sku.id]: v===''?0:Number(v)})) }}
@@ -172,6 +180,7 @@ export default function InventoryDetailPage() {
                         const changed = Number(editedStocks[sku.id]) !== sku.stock
                         return (
                           <td className="px-4 py-3 text-center">
+                            <div className="flex justify-center mb-1.5"><SkuThumb url={sku.image_url} size={40} /></div>
                             <input type="number" min="0"
                               value={editedStocks[sku.id] ?? sku.stock}
                               onChange={e => { const v = e.target.value.replace(/[^0-9]/g,''); setEditedStocks(p => ({...p,[sku.id]:v===''?0:Number(v)})) }}
@@ -221,7 +230,7 @@ function ConfirmSaveModal({ changes, onSave, onClose, saving }) {
               <tbody className="divide-y divide-surface-800">
                 {localChanges.map((ch, i) => (
                   <tr key={ch.skuId} className="hover:bg-surface-800/20">
-                    <td className="px-4 py-2.5 text-surface-200">{ch.label}</td>
+                    <td className="px-4 py-2.5 text-surface-200"><div className="flex items-center gap-2"><SkuThumb url={ch.image_url} size={28} />{ch.label}</div></td>
                     <td className="px-4 py-2.5 text-center text-surface-400 font-mono">{ch.before}</td>
                     <td className="px-4 py-2.5 text-center">
                       <input type="number" min="0" value={ch.after}

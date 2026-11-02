@@ -4,6 +4,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { ChevronLeft, Plus, Trash2, Star, CheckSquare, Square } from 'lucide-react'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll, selectIn } from '../../lib/fetchAll'
 
 export default function FavoritesPage() {
   const navigate = useNavigate()
@@ -16,16 +18,16 @@ export default function FavoritesPage() {
 
   async function loadFavorites() {
     setLoading(true)
-    const { data } = await supabase
+    const { data } = await selectAll(() => supabase
       .from('favorites')
-      .select(`id, created_at, product_skus(id, stock, products(id, name, storage_location_text), o1:option1_id(option_name, option_value), o2:option2_id(option_name, option_value))`)
-      .eq('user_id', user.id)
+      .select(`id, created_at, product_skus(id, stock, image_url, products(id, name, storage_location_text), o1:option1_id(option_name, option_value), o2:option2_id(option_name, option_value))`)
+      .eq('user_id', user.id))
 
     const weekAgo = new Date(Date.now() - 7*86400000).toISOString().slice(0,10)
     const skuIds = (data||[]).map(f => f.product_skus?.id).filter(Boolean)
     let salesMap = {}
     if (skuIds.length > 0) {
-      const { data: salesData } = await supabase.from('sales').select('product_sku_id, quantity').in('product_sku_id', skuIds).gte('sale_date', weekAgo)
+      const { data: salesData } = await selectIn(skuIds, __ids => supabase.from('sales').select('product_sku_id, quantity').in('product_sku_id', __ids).gte('sale_date', weekAgo))
       ;(salesData||[]).forEach(s => { salesMap[s.product_sku_id] = (salesMap[s.product_sku_id]||0) + s.quantity })
     }
     const sorted = (data||[]).sort((a,b) => (salesMap[b.product_skus?.id]||0) - (salesMap[a.product_skus?.id]||0))
@@ -116,7 +118,7 @@ export default function FavoritesPage() {
                     className="accent-primary-500 w-4 h-4 cursor-pointer" />
                 </div>
                 <div className="col-span-4 text-sm text-surface-100 font-medium">{fav.product_skus?.products?.name || '-'}</div>
-                <div className="col-span-4 text-sm text-surface-400">{getSkuLabel(fav)}</div>
+                <div className="col-span-4 text-sm text-surface-400 flex items-center gap-2"><SkuThumb url={fav.product_skus?.image_url} size={32} />{getSkuLabel(fav)}</div>
                 <div className="col-span-2 text-sm text-surface-400">{fav.product_skus?.stock ?? '-'}</div>
                 <div className="col-span-1 text-right">
                   <button onClick={() => deleteSingle(fav.id)} className="p-1.5 hover:bg-red-500/10 text-surface-500 hover:text-red-400 rounded-lg transition-colors">

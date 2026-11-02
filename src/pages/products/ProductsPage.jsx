@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { Plus, Pencil, Trash2, ChevronRight, ChevronDown, Package, AlertTriangle, Search, X, Save, CheckSquare, Square, Tag } from 'lucide-react'
 import toast from 'react-hot-toast'
+import SkuThumb from '../../components/ui/SkuThumb'
+import { selectAll } from '../../lib/fetchAll'
 
 function ConfirmModal({ title, message, onConfirm, onClose }) {
   return (
@@ -31,7 +33,7 @@ function CategoryManagerModal({ categories: initCats, onClose, onChanged }) {
   const [saving, setSaving] = useState(false)
 
   async function loadCats() {
-    const { data } = await supabase.from('categories').select('id, name, sort_order').order('sort_order').order('name')
+    const { data } = await selectAll(() => supabase.from('categories').select('id, name, sort_order').order('sort_order').order('name'))
     setCats(data || []); onChanged()
   }
 
@@ -135,8 +137,8 @@ export default function ProductsPage() {
   async function loadData() {
     setLoading(true)
     const [{ data: cats }, { data: prods }] = await Promise.all([
-      supabase.from('categories').select('id, name, sort_order').order('sort_order').order('name'),
-      supabase.from('products').select('id, name, code, sort_order, is_active, image_url, storage_location_text, factory, sale_price, cost_price, margin, category_id, product_skus(id, stock, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))').eq('is_active', true).order('sort_order').order('name')
+      selectAll(() => supabase.from('categories').select('id, name, sort_order').order('sort_order').order('name')),
+      selectAll(() => supabase.from('products').select('id, name, code, sort_order, is_active, image_url, storage_location_text, factory, sale_price, cost_price, margin, category_id, product_skus(id, stock, image_url, o1:option1_id(option_name, option_value, sort_order), o2:option2_id(option_name, option_value, sort_order))').eq('is_active', true).order('sort_order').order('name'))
     ])
     setCategories(cats || [])
     setProducts(prods || [])
@@ -322,6 +324,7 @@ export default function ProductsPage() {
                         <div className="pl-20 pr-4 pb-2 space-y-0.5">
                           {skus.map(sku => (
                             <div key={sku.id} className="flex items-center gap-2 px-3 py-1.5 bg-surface-800/20 rounded-lg text-xs">
+                              <SkuThumb url={sku.image_url} size={32} />
                               <span className={'font-mono font-semibold w-10 text-right shrink-0 ' + (sku.stock < 10 ? 'text-red-400' : 'text-emerald-400')}>{sku.stock}</span>
                               <span className="text-surface-500">|</span>
                               <span className="text-surface-300">{skuLabel(sku)}</span>

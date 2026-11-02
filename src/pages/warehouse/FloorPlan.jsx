@@ -1,0 +1,471 @@
+// ═══════════════════════════════════════════════════════════
+//  상품찾기 — 평면도 편집기 (게임처럼 그리고, 옮기고, 붙이는 화면)
+//  SVG 로 그림. 좌표 계산은 planMath.js(테스트됨), 규칙 검사는 whLogic.js
+// ═══════════════════════════════════════════════════════════
+import { useState, useEffect, useRef, useCallback, memo } from 'react'
+import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Trash2, Settings, Package, Crosshair } from 'lucide-react'
+import { Btn, FixtureIcon, useFullscreen } from './ui'
+import {
+  SNAP, MIN_ZONE, LIMITS, REASON_TEXT, FIXTURE_LABEL, checkZoneRect, checkOfficeSpot, snapToWall, fixtureAnchor, fixtureLen,
+  shade, rgba, clamp, round2, snap,
+} from './whLogic'
+import * as M from './planMath'
+
+const WALL_ANGLE = { top: 0, bottom: 180, left: -90, right: 90 }
+const css = v => `rgb(var(${v}))`
+const HINTS = {
+  select: '구역을 눌러 고르고 끌어서 옮겨요. 한 번 더 누르면 열려요',
+  wh: '화면을 끌어서 창고를 그려보세요 🏭',
+  zone: '창고 안에서 끌어서 구역을 그려보세요 ▭',
+  window: '벽 가까이를 눌러서 창문을 붙여요',
+  door: '벽 가까이를 눌러서 출입구를 붙여요',
+  office: '창고 안을 눌러서 사무실을 놓아요',
+}
+
+// ── 시설물 그림 (월드 단위, 가운데가 기준, 안쪽이 +y) ──
+function WallGlyph({ kind, len, selected, ghost }) {
+  const th = 0.8
+  return (
+    <g opacity={ghost ? 0.65 : 1}>
+      {kind === 'door' && <path d={`M${-len / 2} 0 L${len / 2} 0 A${len} ${len} 0 0 1 ${-len / 2} ${len} Z`} fill="rgba(217,162,115,0.22)" stroke="#9b6b3e" strokeWidth={0.06} strokeDasharray="0.3 0.22" />}
+      <rect x={-len / 2} y={-th / 2} width={len} height={th} rx={0.24} fill={kind === 'window' ? '#bfe6ff' : '#d9a273'} stroke={kind === 'window' ? '#5aa9d6' : '#9b6b3e'} strokeWidth={0.1} />
+      {kind === 'window' && <><path d={`M0 ${-th / 2}V${th / 2}`} stroke="#5aa9d6" strokeWidth={0.08} /><path d={`M${-len / 2 + 0.3} ${-th * 0.2}L${-len / 2 + 0.85} ${-th * 0.3}`} stroke="#fff" strokeWidth={0.1} strokeLinecap="round" /></>}
+      {kind === 'door' && <circle cx={len / 2 - 0.35} cy={0} r={0.13} fill="#f6e3a1" stroke="#9b6b3e" strokeWidth={0.05} />}
+      {selected && <rect x={-len / 2 - 0.25} y={-th / 2 - 0.25} width={len + 0.5} height={th + 0.5} rx={0.4} fill="none" stroke="#f59e0b" strokeWidth={0.14} />}
+    </g>
+  )
+}
+function OfficeGlyph({ rot, selected, ghost, bad }) {
+  return (
+    <g opacity={ghost ? 0.65 : 1}>
+      <rect x={-1.6} y={-1.3} width={3.2} height={2.6} rx={0.45} fill="#d8c6ff" stroke="#a98cf0" strokeWidth={0.12} />
+      <path d="M-1.9 -0.7 L0 -1.75 L1.9 -0.7 Z" fill="#a98cf0" stroke="#8b6cdc" strokeWidth={0.1} strokeLinejoin="round" />
+      <rect x={-1.1} y={-0.55} width={0.75} height={0.65} rx={0.15} fill="#fff" /><rect x={0.35} y={-0.55} width={0.75} height={0.65} rx={0.15} fill="#fff" />
+      <rect x={-0.35} y={0.2} width={0.7} height={1.0} rx={0.18} fill="#8b6cdc" />
+      <g transform={`translate(0 1.75) rotate(${-rot})`}><text textAnchor="middle" dominantBaseline="central" fontSize={0.62} fontWeight="700" style={{ fill: css('--surface-100') }}>사무실</text></g>
+      {selected && <rect x={-2.1} y={-1.95} width={4.2} height={4.3} rx={0.5} fill="none" stroke="#f59e0b" strokeWidth={0.14} />}
+      {bad && <rect x={-2.1} y={-1.95} width={4.2} height={4.3} rx={0.5} fill="rgba(239,68,68,0.28)" stroke="#ef4444" strokeWidth={0.16} strokeDasharray="0.5 0.35" />}
+    </g>
+  )
+}
+function FixtureShape({ f, W, H, rot, selected, ghost }) {
+  const a = fixtureAnchor(f, W, H)
+  if (f.kind === 'office') return <g transform={`translate(${a.x} ${a.y})`}><OfficeGlyph rot={rot} selected={selected} ghost={ghost} bad={f.bad} /></g>
+  const len = fixtureLen(f.kind, W, H, a.wall)
+  return <g transform={`translate(${a.x} ${a.y}) rotate(${WALL_ANGLE[a.wall]})`}><WallGlyph kind={f.kind} len={len} selected={selected} ghost={ghost} /></g>
+}
+
+// ── 구역 (칸 구조 + 쌓인 박스) ──
+function ZoneShape({ z, highlight, focusBoxId, dim, rot, zoomQ, selected }) {
+  const m = Math.min(z.cw, z.ch), cellPx = m * zoomQ
+  const strokes = cellPx >= 7, texts = cellPx >= 20
+  const pad = m * 0.07, rx = m * 0.16, hl = highlight && highlight.size ? highlight : null
+  const cells = []
+  z.lines.forEach((ln, li) => {
+    for (let s = 1; s <= ln.slot_count; s++) {
+      const st = ln.stacks.get(s)
+      const x = z.x + (s - 1) * z.cw + pad, y = z.y + li * z.ch + pad, w = z.cw - 2 * pad, h = z.ch - 2 * pad
+      if (!st || !st.length) {
+        cells.push(<rect key={`${li}-${s}`} x={x} y={y} width={w} height={h} rx={rx} fill={rgba(z.color, 0.16)} stroke={strokes ? rgba(shade(z.color, 0.7), 0.55) : 'none'} strokeWidth={0.05} strokeDasharray="0.22 0.2" />)
+        continue
+      }
+      const top = st[st.length - 1]
+      const isHl = hl && st.some(b => hl.has(b.id)), isFocus = focusBoxId && st.some(b => b.id === focusBoxId)
+      const faded = hl && !isHl
+      const cx = x + w / 2, cy = y + h / 2, label = String(top.box_number)
+      const fs = Math.min(m * 0.34, (w * 0.86) / Math.max(1.6, label.length * 0.62))
+      cells.push(
+        <g key={`${li}-${s}`} opacity={faded ? 0.3 : 1}>
+          {st.length >= 3 && <rect x={x + m * 0.07} y={y - m * 0.07} width={w} height={h} rx={rx} fill={shade(z.color, 0.8)} />}
+          {st.length >= 2 && <rect x={x + m * 0.035} y={y - m * 0.035} width={w} height={h} rx={rx} fill={shade(z.color, 0.9)} />}
+          <rect x={x} y={y} width={w} height={h} rx={rx} fill={shade(z.color, 1.04)} stroke={isFocus ? '#ff4f93' : isHl ? '#f59e0b' : shade(z.color, 0.6)} strokeWidth={isFocus || isHl ? m * 0.1 : 0.06} className={isHl || isFocus ? 'wh-pulse' : undefined} />
+          {strokes && <rect x={x + w * 0.1} y={cy - h * 0.07} width={w * 0.8} height={h * 0.14} rx={h * 0.05} fill="rgba(255,255,255,0.55)" />}
+          {texts && <g transform={`translate(${cx} ${cy}) rotate(${-rot})`}>
+            <text textAnchor="middle" dominantBaseline="central" fontSize={fs} fontWeight="800" style={{ fill: '#2b3445' }}>{label}</text>
+          </g>}
+          {texts && st.length >= 2 && <g transform={`translate(${x + w} ${y}) rotate(${-rot})`}>
+            <circle r={m * 0.17} fill="#fff" stroke={shade(z.color, 0.6)} strokeWidth={0.05} />
+            <text textAnchor="middle" dominantBaseline="central" fontSize={m * 0.2} fontWeight="800" style={{ fill: '#2b3445' }}>{st.length}</text>
+          </g>}
+        </g>)
+    }
+  })
+  const name = z.name
+  const em = [...name].reduce((s, ch) => s + (ch.charCodeAt(0) > 0x2e80 ? 1.06 : 0.62), 0)       // 글자 폭(em): 한글은 넓고 영문/숫자는 좁다
+  const fs = clamp(Math.min(1.0, (z.w * 0.9) / Math.max(3, em + 1.6)), 0.5, 1.0)
+  const ph = fs * 1.55, pw = ph * 0.95 + em * fs + ph * 0.5
+  return (
+    <g data-hit={`zone:${z.id}`} opacity={dim ? 0.35 : 1} style={{ cursor: 'pointer' }}>
+      <rect x={z.x} y={z.y} width={z.w} height={z.h} rx={0.45} fill={rgba(z.color, 0.26)} stroke={selected ? '#f59e0b' : shade(z.color, 0.8)} strokeWidth={selected ? 0.22 : 0.14} />
+      {cells}
+      <g transform={`translate(${z.x + pw / 2 + 0.35} ${z.y}) rotate(${-rot})`}>
+        <rect x={-pw / 2} y={-ph / 2} width={pw} height={ph} rx={ph / 2} fill="#fff" stroke={shade(z.color, 0.8)} strokeWidth={0.07} />
+        <circle cx={-pw / 2 + ph * 0.5} cy={0} r={ph * 0.2} fill={z.color} />
+        <text x={-pw / 2 + ph * 0.85} y={0} dominantBaseline="central" fontSize={fs} fontWeight="800" style={{ fill: '#334155' }}>{name}</text>
+      </g>
+    </g>
+  )
+}
+
+// ── 바뀌지 않는 큰 부분은 한 번만 그림 (확대/이동 중에 다시 그리지 않도록) ──
+const WorldLayer = memo(function WorldLayer({ model, highlight, focusBoxId, dragZoneId, dragFxId, selZoneId, selFxId, rot, zoomQ }) {
+  const wh = model.warehouse
+  if (!wh) return null
+  const W = wh.width, H = wh.height
+  return (
+    <g>
+      <rect x={0} y={0} width={W} height={H} rx={0.6} style={{ fill: css('--surface-800') }} />
+      <rect x={0} y={0} width={W} height={H} fill="url(#wh-dots)" pointerEvents="none" />
+      <rect x={0} y={0} width={W} height={H} rx={0.6} fill="none" strokeWidth={1.1} pointerEvents="stroke" data-hit="wh" style={{ stroke: css('--surface-500'), cursor: 'pointer' }} />
+      {model.fixtures.map(f => {
+        const a = fixtureAnchor(f, W, H)
+        return (
+          <g key={f.id} data-hit={`fx:${f.id}`} opacity={dragFxId === f.id ? 0.3 : 1} style={{ cursor: 'pointer' }}>
+            <FixtureShape f={f} W={W} H={H} rot={rot} selected={selFxId === f.id} />
+            <circle cx={a.x} cy={a.y} r={1.5} fill="transparent" />
+          </g>)
+      })}
+      {model.zones.map(z => <ZoneShape key={z.id} z={z} highlight={highlight} focusBoxId={focusBoxId} dim={dragZoneId === z.id} rot={rot} zoomQ={zoomQ} selected={selZoneId === z.id} />)}
+    </g>
+  )
+})
+
+const hitOf = el => {
+  const n = el?.closest?.('[data-hit]'); if (!n) return null
+  const s = n.getAttribute('data-hit'), i = s.indexOf(':')
+  return i < 0 ? { kind: s, id: null } : { kind: s.slice(0, i), id: s.slice(i + 1) }
+}
+
+export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZone, onNotify, actions }) {
+  const wh = model.warehouse
+  const { ref: frameRef, full, toggle } = useFullscreen()
+  const boxRef = useRef(null), svgRef = useRef(null)
+  const [size, setSize] = useState({ w: 0, h: 0 })        // 실제로 측정되기 전에는 맞추지 않음 (기본값으로 맞추면 폰에서 잘려 보임)
+  const [view, setViewState] = useState({ cx: 20, cy: 13, zoom: 14, rot: 0 })
+  const viewRef = useRef(view)
+  const setView = useCallback(v => { viewRef.current = typeof v === 'function' ? v(viewRef.current) : v; setViewState(viewRef.current) }, [])
+  const [tool, setTool] = useState('select')
+  const [sel, setSel] = useState(null)          // {type:'zone'|'fx'|'wh', id}
+  const [draft, setDraft] = useState(null)      // 그리는 중인 사각형
+  const [drag, setDrag] = useState(null)        // 옮기는/크기 바꾸는 중 미리보기
+  const [ghost, setGhost] = useState(null)      // 붙이기 미리보기
+  const pts = useRef(new Map()), gesture = useRef(null), anim = useRef(0), inited = useRef(null)
+  const prevSize = useRef(null), rescale = useRef(false), firstFull = useRef(true)
+
+  // 화면 크기
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return
+    const ro = new ResizeObserver(([en]) => { const r = en.contentRect; setSize(s => (Math.abs(s.w - r.width) < 1 && Math.abs(s.h - r.height) < 1 ? s : { w: r.width, h: r.height })) })
+    ro.observe(el); return () => ro.disconnect()
+  }, [])
+  // 처음(또는 창고가 새로 생겼을 때) 창고가 꼭 맞게
+  useEffect(() => {
+    if (size.w < 60) return
+    const key = wh?.id || 'none'; if (inited.current === key) return
+    inited.current = key
+    setView(M.fitView(wh ? { x: 0, y: 0, w: wh.width, h: wh.height } : { x: 0, y: 0, w: 40, h: 26 }, size.w, size.h, viewRef.current.rot, 0.92))
+  }, [size.w, size.h, wh?.id, setView])
+  // 전체화면으로 바꾸면 화면이 커진 비율만큼 확대해서, 보던 장면이 그대로 더 크게 보이게
+  useEffect(() => { if (firstFull.current) { firstFull.current = false; return } rescale.current = true }, [full])
+  useEffect(() => {
+    const p = prevSize.current; prevSize.current = size
+    if (!rescale.current || !p || p.w < 60 || size.w < 60) return
+    rescale.current = false
+    const r = Math.min(size.w / p.w, size.h / p.h)
+    setView(v => ({ ...v, zoom: clamp(v.zoom * r, M.ZOOM_MIN, M.ZOOM_MAX) }))
+  }, [size.w, size.h, setView])
+  // 마우스 휠 확대 (페이지가 같이 스크롤되지 않게 직접 등록)
+  useEffect(() => {
+    const el = svgRef.current; if (!el) return
+    const onWheel = e => {
+      e.preventDefault()
+      const r = el.getBoundingClientRect()
+      setView(v => M.zoomAt(v, r.width, r.height, e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0016))))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [setView])
+  useEffect(() => () => cancelAnimationFrame(anim.current), [])
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') { setTool('select'); setSel(null); setDraft(null); setGhost(null); onSelectZone?.(null) } }
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k)
+  }, [onSelectZone])
+
+  const animateTo = useCallback((to, ms = 380) => {
+    cancelAnimationFrame(anim.current)
+    const from = viewRef.current, t0 = performance.now()
+    const step = now => {
+      const k = Math.min(1, (now - t0) / ms), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2
+      setView({ cx: from.cx + (to.cx - from.cx) * e, cy: from.cy + (to.cy - from.cy) * e, zoom: from.zoom * Math.pow(to.zoom / from.zoom, e), rot: from.rot })
+      if (k < 1) anim.current = requestAnimationFrame(step)
+    }
+    anim.current = requestAnimationFrame(step)
+  }, [setView])
+  // 검색 결과를 누르면 그 구역으로 부드럽게 이동
+  useEffect(() => {
+    if (!focus || size.w < 60) return
+    const z = focus.boxId ? model.zonesById.get(model.boxesById.get(focus.boxId)?.zone_id) : model.zonesById.get(focus.zoneId)
+    if (!z) return
+    const to = M.fitView({ x: z.x, y: z.y, w: z.w, h: z.h }, size.w, size.h, viewRef.current.rot, 0.5)
+    animateTo({ ...to, zoom: clamp(to.zoom, 6, 60) })
+  }, [focus?.nonce]) // eslint-disable-line
+
+  const changeTool = t => { setTool(t); setDraft(null); setGhost(null); if (t !== 'select') { setSel(null); onSelectZone?.(null) } }
+  const select = s => { setSel(s); onSelectZone?.(s?.type === 'zone' ? s.id : null) }
+
+  // ── 포인터(마우스/터치/펜) ──
+  const local = e => { const r = svgRef.current.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] }
+  const toWorld = p => M.s2w(viewRef.current, size.w, size.h, p[0], p[1])
+  const bounds = wh ? { w: wh.width, h: wh.height } : null
+  const calcGhost = w => {
+    if (!wh) return null
+    if (tool === 'office') { const x = round2(clamp(snap(w[0], SNAP), 1.8, wh.width - 1.8)), y = round2(clamp(snap(w[1], SNAP), 1.5, wh.height - 1.5)); return { kind: 'office', x, y, bad: !checkOfficeSpot({ x, y }, model).ok } }
+    const s = snapToWall({ x: w[0], y: w[1] }, wh.width, wh.height)
+    return { kind: tool, wall: s.wall, pos: s.pos }
+  }
+
+  const onPointerDown = e => {
+    if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
+    svgRef.current.setPointerCapture?.(e.pointerId)
+    const p = local(e); pts.current.set(e.pointerId, p)
+    if (pts.current.size === 2) {                                            // 두 손가락: 확대/이동
+      cancelAnimationFrame(anim.current)
+      const [a, b] = [...pts.current.values()]
+      gesture.current = { type: 'pinch', a0: a, b0: b, view0: viewRef.current }
+      setDrag(null); setDraft(null); setGhost(null); return
+    }
+    if (pts.current.size > 2) return
+    cancelAnimationFrame(anim.current)
+    const w = toWorld(p), hit = hitOf(e.target)
+    const base = { startScreen: p, start: w, startView: viewRef.current, moved: false }
+    if (tool === 'wh' || tool === 'zone') {
+      if (tool === 'wh' && wh) return
+      gesture.current = { ...base, type: 'draw', kind: tool }
+      const rect = M.drawRect(w, w, tool === 'zone' ? bounds : null, tool === 'zone' ? SNAP : 1)
+      setDraft({ kind: tool, rect, valid: false }); return
+    }
+    if (tool === 'window' || tool === 'door' || tool === 'office') {
+      gesture.current = { ...base, type: 'stamp' }; setGhost(calcGhost(w)); return
+    }
+    // 선택 도구
+    if (hit?.kind === 'zone-resize' && canEdit) { const z = model.zonesById.get(hit.id); if (z) { gesture.current = { ...base, type: 'resize-zone', id: z.id, orig: { x: z.x, y: z.y, w: z.w, h: z.h } }; return } }
+    if (hit?.kind === 'wh-resize' && canEdit && wh) { gesture.current = { ...base, type: 'resize-wh', orig: { w: wh.width, h: wh.height } }; return }
+    if (hit?.kind === 'fx') {
+      const f = model.fixtures.find(x => x.id === hit.id)
+      if (f) { select({ type: 'fx', id: f.id }); gesture.current = { ...base, type: canEdit ? 'drag-fx' : 'tap', id: f.id, kind: f.kind }; return }
+    }
+    if (hit?.kind === 'zone') {
+      const z = model.zonesById.get(hit.id)
+      if (z) {
+        const wasSel = sel?.type === 'zone' && sel.id === z.id
+        select({ type: 'zone', id: z.id })
+        gesture.current = { ...base, type: canEdit ? 'drag-zone' : 'tap-zone', id: z.id, wasSel, orig: { x: z.x, y: z.y, w: z.w, h: z.h } }; return
+      }
+    }
+    gesture.current = { ...base, type: 'pan', hit: hit?.kind === 'wh' ? 'wh' : null }
+  }
+
+  const onPointerMove = e => {
+    const known = pts.current.has(e.pointerId)
+    if (!known) { if (e.pointerType === 'mouse' && (tool === 'window' || tool === 'door' || tool === 'office')) setGhost(calcGhost(toWorld(local(e)))); return }
+    const p = local(e); pts.current.set(e.pointerId, p)
+    const g = gesture.current; if (!g) return
+    const { w: vw, h: vh } = size
+    if (g.type === 'pinch') {
+      if (pts.current.size < 2) return
+      const [a, b] = [...pts.current.values()]
+      const m0 = [(g.a0[0] + g.b0[0]) / 2, (g.a0[1] + g.b0[1]) / 2], m1 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+      let v = M.zoomAt(g.view0, vw, vh, m0[0], m0[1], M.dist(a, b) / Math.max(1, M.dist(g.a0, g.b0)))
+      v = M.panByScreen(v, vw, vh, m1[0] - m0[0], m1[1] - m0[1]); setView(v); return
+    }
+    const dScreen = M.dist(p, g.startScreen)
+    if (!g.moved && dScreen > 5) g.moved = true
+    const w = toWorld(p)
+    switch (g.type) {
+      case 'pan': if (g.moved) setView(M.panByScreen(g.startView, vw, vh, p[0] - g.startScreen[0], p[1] - g.startScreen[1])); break
+      case 'drag-zone': {
+        if (!g.moved) break
+        const rect = M.moveRect(g.orig, w[0] - g.start[0], w[1] - g.start[1], bounds, SNAP), chk = checkZoneRect(rect, model, g.id)
+        g.last = { rect, ok: chk.ok, reason: chk.reason }; setDrag({ type: 'zone', id: g.id, rect, valid: chk.ok }); break
+      }
+      case 'resize-zone': {
+        const rect = M.resizeRect(g.orig, w[0] - g.start[0], w[1] - g.start[1], bounds, SNAP, MIN_ZONE), chk = checkZoneRect(rect, model, g.id)
+        g.moved = true; g.last = { rect, ok: chk.ok, reason: chk.reason }; setDrag({ type: 'zone', id: g.id, rect, valid: chk.ok }); break
+      }
+      case 'resize-wh': {
+        const minW = Math.max(LIMITS.whMin[0], Math.ceil(Math.max(0, ...model.zones.map(z => z.x + z.w)))), minH = Math.max(LIMITS.whMin[1], Math.ceil(Math.max(0, ...model.zones.map(z => z.y + z.h))))
+        const nw = clamp(Math.round(g.orig.w + (w[0] - g.start[0])), minW, LIMITS.whMax[0]), nh = clamp(Math.round(g.orig.h + (w[1] - g.start[1])), minH, LIMITS.whMax[1])
+        g.moved = true; g.last = { width: nw, height: nh }; setDrag({ type: 'wh', w: nw, h: nh }); break
+      }
+      case 'drag-fx': {
+        if (!g.moved || !wh) break
+        const patch = g.kind === 'office' ? { x: round2(clamp(snap(w[0], SNAP), 1.8, wh.width - 1.8)), y: round2(clamp(snap(w[1], SNAP), 1.5, wh.height - 1.5)) } : snapToWall({ x: w[0], y: w[1] }, wh.width, wh.height)
+        g.last = patch; setDrag({ type: 'fx', id: g.id, kind: g.kind, patch: g.kind === 'office' ? { ...patch, bad: !checkOfficeSpot(patch, model, g.id).ok } : patch }); break
+      }
+      case 'draw': {
+        const rect = M.drawRect(g.start, w, g.kind === 'zone' ? bounds : null, g.kind === 'zone' ? SNAP : 1)
+        let valid, reason
+        if (g.kind === 'zone') { const c = checkZoneRect(rect, model); valid = c.ok; reason = c.reason }
+        else { valid = rect.w >= LIMITS.whMin[0] && rect.h >= LIMITS.whMin[1]; reason = valid ? null : 'wh-small' }
+        g.moved = true; g.last = { rect, valid, reason }; setDraft({ kind: g.kind, rect, valid }); break
+      }
+      case 'stamp': g.moved = true; setGhost(calcGhost(w)); break
+      default: break
+    }
+  }
+
+  const finish = (e, cancelled) => {
+    const had = pts.current.has(e.pointerId); pts.current.delete(e.pointerId)
+    const g = gesture.current
+    if (g?.type === 'pinch') { if (pts.current.size < 2) gesture.current = null; return }
+    if (!had || !g) return
+    gesture.current = null
+    const p = local(e), w = toWorld(p)
+    setDrag(null); setDraft(null)
+    if (cancelled) { setGhost(null); return }
+    switch (g.type) {
+      case 'pan':
+        if (!g.moved) { if (g.hit === 'wh' && wh) select({ type: 'wh', id: wh.id }); else select(null) }
+        break
+      case 'tap-zone': case 'drag-zone': {
+        if (g.moved && g.last) { if (g.last.ok) actions.moveZone(g.id, g.last.rect); else onNotify?.(REASON_TEXT[g.last.reason] || '여기에는 놓을 수 없어요') }
+        else if (!g.moved && g.wasSel) { const z = model.zonesById.get(g.id); const c = z && M.cellAt(z, w[0], w[1]); actions.openZone(g.id, c?.lineIdx) }
+        break
+      }
+      case 'resize-zone': if (g.last) { if (g.last.ok) actions.moveZone(g.id, g.last.rect); else onNotify?.(REASON_TEXT[g.last.reason] || '그 크기로는 바꿀 수 없어요') } break
+      case 'resize-wh': if (g.last && (g.last.width !== wh.width || g.last.height !== wh.height)) actions.updateWarehouse({ width: g.last.width, height: g.last.height }); break
+      case 'drag-fx': if (g.moved && g.last) { const { bad, ...patch } = g.last; actions.moveFixture(g.id, patch) } break      // 사무실이 구역과 겹치면 저장 단계에서 거절하고 알려줌
+      case 'draw': {
+        const r = g.last
+        if (!r) break
+        if (r.valid) { if (g.kind === 'wh') actions.createWarehouse(r.rect); else actions.requestCreateZone(r.rect); setTool('select') }
+        else onNotify?.(g.kind === 'wh' ? `창고가 너무 작아요 (최소 ${LIMITS.whMin[0]} × ${LIMITS.whMin[1]} 칸)` : (REASON_TEXT[r.reason] || '여기에는 그릴 수 없어요'))
+        break
+      }
+      case 'stamp': { const gh = calcGhost(w); setGhost(null); if (gh) { const { bad, ...f } = gh; actions.addFixture(f) } break }
+      default: break
+    }
+  }
+
+  // ── 화면 ──
+  const zoomQ = Math.pow(2, Math.round(Math.log2(view.zoom) * 3) / 3)
+  const selZone = sel?.type === 'zone' ? model.zonesById.get(sel.id) : null
+  const selFx = sel?.type === 'fx' ? model.fixtures.find(f => f.id === sel.id) : null
+  const handleR = Math.max(0.55, 15 / view.zoom)
+  const dragZone = drag?.type === 'zone' ? model.zonesById.get(drag.id) : null
+  const tools = [
+    ['select', '선택', 'select', true], ['wh', '창고 그리기', 'warehouse', !wh], ['zone', '구역 그리기', 'zone', !!wh],
+    ['window', '창문', 'window', !!wh], ['door', '출입구', 'door', !!wh], ['office', '사무실', 'office', !!wh],
+  ].filter(t => t[3])
+
+  return (
+    <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col h-full gap-2'}>
+      <div className="flex items-center gap-2 flex-wrap shrink-0">
+        <div className="flex items-center gap-2 mr-1"><span className="text-lg">🗺️</span><h2 className="font-bold text-white text-sm">평면도</h2></div>
+        {canEdit && tools.map(([k, label, icon]) => (
+          <button key={k} type="button" onClick={() => changeTool(k)}
+            className={`inline-flex items-center gap-1.5 pl-2.5 pr-3 py-1.5 rounded-2xl text-xs font-bold border transition-all active:scale-95 ${tool === k ? 'bg-primary-500 border-primary-500 shadow-lg shadow-primary-500/25' : 'bg-surface-800 border-surface-700 text-surface-200 hover:bg-surface-700'}`}
+            style={tool === k ? { color: '#fff' } : undefined}>
+            <FixtureIcon kind={icon} size={18} />{label}
+          </button>))}
+        <div className="flex-1" />
+        {full && <Btn size="sm" variant="soft" onClick={toggle}>닫기 ✕</Btn>}
+      </div>
+
+      <div ref={boxRef} className="relative flex-1 min-h-[300px] rounded-[28px] overflow-hidden border border-surface-700" style={{ background: css('--surface-950') }}>
+        <svg ref={svgRef} data-testid="plan-svg" width={size.w} height={size.h} className="absolute inset-0 touch-none select-none"
+          style={{ cursor: tool === 'select' ? 'grab' : 'crosshair' }}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finish(e, false)} onPointerCancel={e => finish(e, true)}
+          onContextMenu={e => e.preventDefault()}>
+          <defs>
+            <pattern id="wh-dots" width="1" height="1" patternUnits="userSpaceOnUse"><circle cx="0.5" cy="0.5" r="0.045" style={{ fill: css('--surface-400'), opacity: 0.5 }} /></pattern>
+            <pattern id="wh-bg" width="2" height="2" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.05" style={{ fill: css('--surface-500'), opacity: 0.35 }} /></pattern>
+            <style>{`@keyframes whpulse{0%,100%{opacity:1}50%{opacity:.35}}.wh-pulse{animation:whpulse 1.1s ease-in-out infinite}`}</style>
+          </defs>
+          <g transform={M.viewTransform(view, size.w, size.h)}>
+            <rect x={-300} y={-300} width={640} height={640} fill="url(#wh-bg)" pointerEvents="none" />
+            <WorldLayer model={model} highlight={highlight} focusBoxId={focus?.boxId || null} dragZoneId={dragZone?.id || null} dragFxId={drag?.type === 'fx' ? drag.id : null}
+              selZoneId={selZone?.id || null} selFxId={selFx?.id || null} rot={view.rot} zoomQ={zoomQ} />
+
+            {/* 창고 선택 표시 + 크기 조절 손잡이 */}
+            {wh && sel?.type === 'wh' && <g>
+              <rect x={0} y={0} width={drag?.type === 'wh' ? drag.w : wh.width} height={drag?.type === 'wh' ? drag.h : wh.height} rx={0.6} fill="none" stroke="#f59e0b" strokeWidth={0.2} strokeDasharray="0.6 0.4" pointerEvents="none" />
+              {canEdit && <circle cx={drag?.type === 'wh' ? drag.w : wh.width} cy={drag?.type === 'wh' ? drag.h : wh.height} r={handleR} fill="#f59e0b" stroke="#fff" strokeWidth={handleR * 0.18} data-hit="wh-resize" style={{ cursor: 'nwse-resize' }} />}
+            </g>}
+            {/* 선택한 구역의 크기 조절 손잡이 */}
+            {selZone && canEdit && !drag && <circle cx={selZone.x + selZone.w} cy={selZone.y + selZone.h} r={handleR} fill="#f59e0b" stroke="#fff" strokeWidth={handleR * 0.18} data-hit={`zone-resize:${selZone.id}`} style={{ cursor: 'nwse-resize' }} />}
+            {/* 옮기는/크기 바꾸는 중인 구역 미리보기 */}
+            {dragZone && drag.rect && <g pointerEvents="none">
+              <rect x={drag.rect.x} y={drag.rect.y} width={drag.rect.w} height={drag.rect.h} rx={0.45} fill={drag.valid ? rgba(dragZone.color, 0.5) : 'rgba(239,68,68,0.35)'} stroke={drag.valid ? '#f59e0b' : '#ef4444'} strokeWidth={0.22} strokeDasharray="0.5 0.35" />
+              <g transform={`translate(${drag.rect.x + drag.rect.w / 2} ${drag.rect.y + drag.rect.h / 2}) rotate(${-view.rot})`}>
+                <text textAnchor="middle" dominantBaseline="central" fontSize={Math.min(1.1, drag.rect.w / 5)} fontWeight="800" style={{ fill: drag.valid ? '#334155' : '#b91c1c' }}>{dragZone.name}</text>
+              </g>
+            </g>}
+            {/* 구역/창고 그리는 중 */}
+            {draft && draft.rect.w > 0 && <g pointerEvents="none">
+              <rect x={draft.rect.x} y={draft.rect.y} width={draft.rect.w} height={draft.rect.h} rx={0.45} fill={draft.valid ? 'rgba(125,211,252,0.35)' : 'rgba(239,68,68,0.3)'} stroke={draft.valid ? '#38bdf8' : '#ef4444'} strokeWidth={0.2} strokeDasharray="0.5 0.35" />
+              <g transform={`translate(${draft.rect.x + draft.rect.w / 2} ${draft.rect.y + draft.rect.h / 2}) rotate(${-view.rot})`}>
+                <text textAnchor="middle" dominantBaseline="central" fontSize={Math.max(0.7, Math.min(1.3, draft.rect.w / 7))} fontWeight="800" style={{ fill: css('--surface-100') }}>{round2(draft.rect.w)} × {round2(draft.rect.h)}</text>
+              </g>
+            </g>}
+            {/* 붙이기 미리보기 / 옮기는 중인 시설물 */}
+            {wh && ghost && <g pointerEvents="none"><FixtureShape f={ghost} W={wh.width} H={wh.height} rot={view.rot} ghost /></g>}
+            {wh && drag?.type === 'fx' && <g pointerEvents="none"><FixtureShape f={{ kind: drag.kind, ...drag.patch }} W={wh.width} H={wh.height} rot={view.rot} ghost /></g>}
+          </g>
+        </svg>
+
+        {/* 창고가 아직 없을 때 */}
+        {!wh && tool !== 'wh' && (
+          <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-none">
+            <div className="text-center max-w-xs pointer-events-auto">
+              <div className="text-6xl mb-3">🏭</div>
+              <p className="text-base font-bold text-white">{canEdit ? '창고를 그려볼까요?' : '아직 창고가 없어요'}</p>
+              <p className="text-xs text-surface-400 mt-1.5 leading-relaxed">{canEdit ? '창고는 하나만 그릴 수 있어요. 그린 뒤에 구역과 박스를 채워요.' : '관리자나 매니저가 창고를 그리면 여기에 보여요.'}</p>
+              {canEdit && <Btn variant="primary" className="mt-4" onClick={() => changeTool('wh')}><FixtureIcon kind="warehouse" size={18} /> 창고 그리기</Btn>}
+            </div>
+          </div>)}
+
+        {/* 선택한 것 */}
+        {sel && (selZone || selFx || (sel.type === 'wh' && wh)) && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 max-w-[94%] flex items-center gap-1.5 flex-wrap justify-center px-3 py-2 rounded-2xl bg-surface-900/95 border border-surface-700 shadow-xl backdrop-blur">
+            {selZone && <>
+              <span className="w-3 h-3 rounded-full shrink-0" style={{ background: selZone.color }} />
+              <span className="text-xs font-bold text-white mr-1">{selZone.name}</span>
+              <span className="text-[11px] text-surface-400 mr-1">박스 {selZone.boxCount}개</span>
+              <Btn size="sm" variant="primary" onClick={() => actions.openZone(selZone.id)}><Package size={13} /> 열기</Btn>
+              {canEdit && <Btn size="sm" variant="soft" onClick={() => actions.editZone(selZone.id)}><Settings size={13} /> 설정</Btn>}
+              {canEdit && <Btn size="sm" variant="danger" title="구역 삭제" onClick={() => actions.deleteZone(selZone.id)}><Trash2 size={13} /></Btn>}
+            </>}
+            {selFx && <>
+              <FixtureIcon kind={selFx.kind} size={18} /><span className="text-xs font-bold text-white mr-1">{FIXTURE_LABEL[selFx.kind]}</span>
+              {canEdit ? <Btn size="sm" variant="danger" onClick={() => { actions.removeFixture(selFx.id); setSel(null) }}><Trash2 size={13} /> 삭제</Btn> : <span className="text-[11px] text-surface-400">보기만 가능해요</span>}
+            </>}
+            {sel.type === 'wh' && wh && <>
+              <span className="text-xs font-bold text-white mr-1">🏭 {wh.name} · {wh.width}×{wh.height}칸</span>
+              {canEdit && <Btn size="sm" variant="soft" onClick={() => actions.editWarehouse()}><Settings size={13} /> 설정</Btn>}
+              {canEdit && <Btn size="sm" variant="danger" title="창고 삭제" onClick={() => actions.deleteWarehouse()}><Trash2 size={13} /></Btn>}
+            </>}
+          </div>)}
+
+        {/* 안내 문구 */}
+        <div className="absolute left-3 bottom-3 max-w-[60%] px-3 py-1.5 rounded-2xl bg-surface-900/90 border border-surface-700 text-[11px] text-surface-300 backdrop-blur">
+          {canEdit ? HINTS[tool] : '구역을 눌러 열어보세요. 끌면 움직이고, 두 손가락(휠)으로 확대해요'}
+        </div>
+
+        {/* 확대/축소/회전/전체화면 */}
+        <div className="absolute right-3 bottom-3 flex flex-col gap-1.5">
+          {[
+            [<Plus size={16} />, '확대', () => setView(v => M.zoomAt(v, size.w, size.h, size.w / 2, size.h / 2, 1.3))],
+            [<Minus size={16} />, '축소', () => setView(v => M.zoomAt(v, size.w, size.h, size.w / 2, size.h / 2, 1 / 1.3))],
+            [<RotateCcw size={16} />, '왼쪽으로 회전', () => setView(v => M.rotateView(v, -90))],
+            [<RotateCw size={16} />, '오른쪽으로 회전', () => setView(v => M.rotateView(v, 90))],
+            [<Crosshair size={16} />, '창고 전체 보기', () => animateTo(M.fitView(wh ? { x: 0, y: 0, w: wh.width, h: wh.height } : { x: 0, y: 0, w: 40, h: 26 }, size.w, size.h, viewRef.current.rot, 0.92))],
+            [full ? <Minimize2 size={16} /> : <Maximize2 size={16} />, full ? '전체화면 닫기' : '전체화면', toggle],
+          ].map(([icon, label, fn], i) => (
+            <button key={i} type="button" title={label} aria-label={label} onClick={fn}
+              className="w-10 h-10 rounded-2xl bg-surface-900/95 border border-surface-700 text-surface-200 flex items-center justify-center shadow-lg backdrop-blur hover:bg-surface-800 active:scale-90 transition-all">{icon}</button>))}
+        </div>
+      </div>
+    </div>
+  )
+}
