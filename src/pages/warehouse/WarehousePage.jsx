@@ -9,7 +9,7 @@ import { useAuth } from '../../context/AuthContext'
 import SkuThumb from '../../components/ui/SkuThumb'
 import api from './whApi'
 import { makeActions } from './whActions'
-import { buildModel, emptyRaw, rawReducer, searchAll, locationText, LIMITS } from './whLogic'
+import { buildModel, emptyRaw, rawReducer, searchAll, locationText, LIMITS, stackRepairs } from './whLogic'
 import { Btn, Modal, Field, Stepper, inputCls, useAsk, usePrompt, EmptyNote, StockBadge } from './ui'
 import FloorPlan from './FloorPlan'
 import Scene3D from './Scene3D'
@@ -18,6 +18,7 @@ import ZoneDetail from './ZoneDetail'
 import BoxPanel from './BoxPanel'
 import ProductPicker from './ProductPicker'
 import StockCheck from './StockCheck'
+import MoveBoxDialog from './MoveBoxDialog'
 
 const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
@@ -123,13 +124,14 @@ export default function WarehousePage() {
   const highlight = results.ids.size ? results.ids : null
   const [focus, setFocus] = useState(null)
   const [activeZone, setActiveZone] = useState(null)
-  const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false)
+  const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false), [moveFor, setMoveFor] = useState(null)
   const planRef = useRef(null)
 
   const load = useCallback(async quiet => {
     try {
       if (!quiet) setStatus('loading')
       const r = await api.loadAll(); rawRef.current = r; setRaw(r); setStatus('ready')
+      if (stackRepairs(r).length) actions.repairStacks()                                           // 공중에 떠 있는 박스가 있으면 자동으로 붙임
     } catch (e) {
       if (e.code === 'NO_TABLE') setStatus('setup'); else if (!quiet) { setErrMsg(e.message || '불러오지 못했어요'); setStatus('error') }
     }
@@ -163,6 +165,7 @@ export default function WarehousePage() {
     moveZone: actions.moveZone, deleteZone: actions.deleteZone, requestCreateZone: rect => setZoneForm({ mode: 'create', rect }),
     openZone: (id, line) => setZoneDetail({ id, line: line ?? 0 }), editZone: id => setZoneForm({ mode: 'edit', id }),
     addFixture: actions.addFixture, moveFixture: actions.moveFixture, removeFixture: actions.removeFixture,
+    openBox: id => setBoxId(id), moveBox: actions.moveBox,
   }), [actions])
 
   const submitZone = async form => {
@@ -199,7 +202,7 @@ export default function WarehousePage() {
 
       {status === 'ready' && (
         <div className="grid xl:grid-cols-[minmax(0,1fr)_440px] gap-4 items-start">
-          <section ref={planRef} className={`${card} p-3 sm:p-4 h-[70vh] min-h-[480px]`}>
+          <section ref={planRef} className={`${card} p-3 sm:p-4 h-[78vh] min-h-[520px]`}>
             <FloorPlan model={model} canEdit={canEdit} highlight={highlight} focus={focus} onSelectZone={setActiveZone} onNotify={m => toast(m)} actions={planActions} />
           </section>
           <div className="space-y-4 min-w-0">
@@ -216,7 +219,8 @@ export default function WarehousePage() {
       {zoneForm && <ZoneDialog mode={zoneForm.mode} zone={zoneForm.mode === 'edit' ? model.zonesById.get(zoneForm.id) : null} rect={zoneForm.rect} model={model} onSubmit={submitZone} onClose={() => setZoneForm(null)} />}
       {zoneDetail && <ZoneDetail zoneId={zoneDetail.id} initialLine={zoneDetail.line} model={model} canEdit={canEdit} highlight={highlight} actions={actions} prompt={prompt}
         onOpenBox={setBoxId} onEditZone={id => setZoneForm({ mode: 'edit', id })} onClose={() => setZoneDetail(null)} />}
-      {boxId && <BoxPanel boxId={boxId} model={model} canEdit={canEdit} actions={actions} onAddProducts={setPickerFor} onLocate={locate} onClose={() => setBoxId(null)} />}
+      {boxId && <BoxPanel boxId={boxId} model={model} canEdit={canEdit} actions={actions} onAddProducts={setPickerFor} onLocate={locate} onMove={setMoveFor} onClose={() => setBoxId(null)} />}
+      {moveFor && <MoveBoxDialog boxId={moveFor} model={model} onClose={() => setMoveFor(null)} onSubmit={async t => { if (await actions.moveBox(moveFor, t)) setMoveFor(null) }} />}
       {pickerFor && model.boxesById.get(pickerFor) && <ProductPicker boxLabel={`박스 ${model.boxesById.get(pickerFor).box_number}`} loadCatalog={api.loadCatalog} placed={model.placed} onConfirm={pickBoxes} onClose={() => setPickerFor(null)} />}
       {whDialog && model.warehouse && <WarehouseDialog wh={model.warehouse} onClose={() => setWhDialog(false)} onSubmit={async v => { if (await actions.updateWarehouse(v)) setWhDialog(false) }} />}
       {stockCheck && <StockCheck model={model} loadCatalog={api.loadCatalog} onFind={name => { setQuery(name); setStockCheck(false) }} onClose={() => setStockCheck(false)} />}

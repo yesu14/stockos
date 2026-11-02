@@ -33,10 +33,11 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
   const boxRef = useRef(null), canvasRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })        // 실제로 측정되기 전에는 맞추지 않음
   const [topView, setTopView] = useState(false)
+  const [numbers, setNumbers] = useState(true)          // 번호 모두 보기 (가려진 박스도 번호표로 보여줌)
   const cam = useRef(null), scene = useRef(null), dirty = useRef(true), tween = useRef(null), pal = useRef(DARK_PALETTE)
   const pointers = useRef(new Map()), gesture = useRef(null), camKey = useRef(null), lastDraw = useRef(0)
   const prevSize = useRef(null), rescale = useRef(false), firstFull = useRef(true)
-  const latest = useRef({}); latest.current = { model, highlight, focus, activeZoneId, size }
+  const latest = useRef({}); latest.current = { model, highlight, focus, activeZoneId, size, numbers }
   const dpr = typeof window !== 'undefined' ? Math.min(2.5, window.devicePixelRatio || 1) : 1
 
   const tweenTo = useCallback((to, ms = 420) => {
@@ -71,7 +72,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
     cam.current = { ...c, scale: clamp(c.scale * r, SCALE_MIN, SCALE_MAX), panX: c.panX * r, panY: c.panY * r }; dirty.current = true
   }, [size.w, size.h])
   // 데이터/강조가 바뀌면 다시 그리기
-  useEffect(() => { dirty.current = true }, [model, highlight, focus?.boxId, activeZoneId])
+  useEffect(() => { dirty.current = true }, [model, highlight, focus?.boxId, activeZoneId, numbers])
   // 검색 결과를 누르면 그 박스/구역으로 이동
   useEffect(() => {
     if (!focus || !cam.current || size.w < 60) return
@@ -100,7 +101,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
       if (!cvs || !cam.current || !L.model.warehouse) return
       dirty.current = false; lastDraw.current = t
       const ctx = cvs.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      scene.current = buildScene(L.model, cam.current, L.size, { palette: pal.current, highlight: L.highlight, focusId: L.focus?.boxId || null, activeZoneId: L.activeZoneId })
+      scene.current = buildScene(L.model, cam.current, L.size, { palette: pal.current, highlight: L.highlight, focusId: L.focus?.boxId || null, activeZoneId: L.activeZoneId, allNumbers: L.numbers })
       drawScene(ctx, scene.current, L.size, { pulse: 0.5 + 0.5 * Math.sin(t / 230) })
     }
     raf = requestAnimationFrame(loop); return () => cancelAnimationFrame(raf)
@@ -188,6 +189,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
             <button type="button" className={ctl} title="왼쪽으로 돌리기" aria-label="왼쪽으로 돌리기" onClick={() => turn(-Math.PI / 4)}><RotateCcw size={16} /></button>
             <button type="button" className={ctl} title="오른쪽으로 돌리기" aria-label="오른쪽으로 돌리기" onClick={() => turn(Math.PI / 4)}><RotateCw size={16} /></button>
             <button type="button" className={`${ctl} ${topView ? '!bg-primary-500 !border-primary-500' : ''}`} style={topView ? { color: '#fff' } : undefined} title="위에서 보기" aria-label="위에서 보기" onClick={toggleTop}><Layers size={16} /></button>
+            <button type="button" className={`${ctl} text-[11px] font-black ${numbers ? '!bg-primary-500 !border-primary-500' : ''}`} style={numbers ? { color: '#fff' } : undefined} title="번호 모두 보기" aria-label="번호 모두 보기" onClick={() => setNumbers(v => !v)}>123</button>
             <button type="button" className={ctl} title="처음 시점" aria-label="처음 시점" onClick={reset}><Crosshair size={16} /></button>
             <button type="button" className={ctl} title={full ? '전체화면 닫기' : '전체화면'} aria-label="전체화면" onClick={toggle}>{full ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
           </div>

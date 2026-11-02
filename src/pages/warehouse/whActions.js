@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════
 import {
   LIMITS, buildModel, checkZoneRect, REASON_TEXT, round2, normNumber, findBoxByNumber,
-  nextBoxNumber, stackAt, locationText, boxesAbove, boxesLostBy, itemKey, checkOfficeSpot,
+  nextBoxNumber, stackAt, locationText, boxesAbove, boxesLostBy, itemKey, checkOfficeSpot, planBoxMove, stackRepairs,
 } from './whLogic'
 
 const soft = msg => Object.assign(new Error(msg), { soft: true })     // 입력 오류: 다시 불러올 필요 없음
@@ -214,6 +214,21 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
     notify.success('박스를 삭제했어요')
   })
 
+  /** 박스를 다른 칸/줄/구역으로 옮김 (옮긴 자리 맨 위, 원래 자리 위 박스는 한 층씩 내려앉음). 담긴 상품과 번호는 그대로 */
+  const moveBox = (boxId, target) => guard(async () => {
+    const plan = planBoxMove(model(), boxId, target)
+    if (!plan.ok) throw soft(plan.text)
+    for (const st of plan.steps) dispatch({ type: 'box/patch', row: await api.patchBox(st.id, st.patch) })     // 겹치지 않는 순서로 하나씩
+    notify.success(`박스를 옮겼어요 → ${plan.target.zoneName} ${plan.target.lineNo}번째 줄 ${plan.target.slot}번째 칸 ${plan.toTier}층`)
+    return plan
+  })
+  /** 중간에 끊겨서 층에 빈틈이 생겼다면 자동으로 붙여줌 (공중에 뜬 박스 방지) */
+  const repairStacks = () => guard(async () => {
+    const fixes = stackRepairs(getRaw())
+    for (const f of fixes) dispatch({ type: 'box/patch', row: await api.patchBox(f.id, { tier: f.tier }) })
+    return fixes.length
+  })
+
   // ── 박스 안 상품 ──
   /** entries: [{ sku:{id,product_id,opt1,opt2,label,image_url}, productName, qty }] — 이미 있는 옵션이면 수량을 더함 */
   const addItems = (boxId, entries) => guard(async () => {
@@ -253,6 +268,6 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
   return {
     reload, createWarehouse, updateWarehouse, deleteWarehouse, addFixture, moveFixture, removeFixture,
     createZone, moveZone, updateZone, deleteZone, addLine, setLineSlots, deleteLine,
-    addBox, renameBox, deleteBox, addItems, setQty, removeItem,
+    addBox, renameBox, deleteBox, moveBox, repairStacks, addItems, setQty, removeItem,
   }
 }

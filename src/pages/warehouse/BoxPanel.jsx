@@ -27,7 +27,7 @@ function QtyInput({ value, onCommit, disabled, max = Infinity }) {
   )
 }
 
-export default function BoxPanel({ boxId, model, canEdit, actions, onAddProducts, onLocate, onClose }) {
+export default function BoxPanel({ boxId, model, canEdit, actions, onAddProducts, onLocate, onMove, onClose }) {
   const box = model.boxesById.get(boxId)
   const [num, setNum] = useState(box?.box_number ?? '')
   const [armed, setArmed] = useState(null)
@@ -45,6 +45,7 @@ export default function BoxPanel({ boxId, model, canEdit, actions, onAddProducts
     <Modal onClose={onClose} level={1} accent={box.zoneColor} width="max-w-xl" icon="📦" title={`박스 ${box.box_number}`} subtitle={locationText(box)}
       footer={<>
         <Btn variant="soft" onClick={() => onLocate(box.id)}><MapPin size={14} /> 위치 보기</Btn>
+        {canEdit && <Btn variant="soft" onClick={() => onMove(box.id)}>↔ 이동</Btn>}
         {canEdit && <Btn variant="primary" onClick={() => onAddProducts(box.id)}><Plus size={14} /> 상품 담기</Btn>}
         {canEdit && <Btn variant="danger" size="icon" title="박스 삭제" onClick={async () => { const ok = await actions.deleteBox(box.id); if (ok === true) onClose() }}><Trash2 size={15} /></Btn>}
       </>}>

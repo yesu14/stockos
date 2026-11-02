@@ -63,6 +63,8 @@ export function drawRect(a, b, bounds, step) {
   if (bounds) { x1 = clamp(x1, 0, bounds.w); x2 = clamp(x2, 0, bounds.w); y1 = clamp(y1, 0, bounds.h); y2 = clamp(y2, 0, bounds.h) }
   return normRect(x1, y1, x2, y2)
 }
+/** (월드 좌표) 점이 들어 있는 구역 */
+export const zoneAt = (zones, wx, wy) => zones.find(z => wx >= z.x && wx <= z.x + z.w && wy >= z.y && wy <= z.y + z.h) || null
 /** 구역 안에서 (월드 좌표) 어느 줄/칸인지 */
 export function cellAt(zone, wx, wy) {
   if (wx < zone.x || wy < zone.y || wx > zone.x + zone.w || wy > zone.y + zone.h) return null

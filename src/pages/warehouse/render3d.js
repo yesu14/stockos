@@ -163,7 +163,7 @@ export function buildScene(model, cam, vp, opts = {}) {
     const len = fixtureLen(fx.kind, W, H, fx.wall), pos = fx.pos ?? 0.5
     const horizontal = fx.wall === 'top' || fx.wall === 'bottom'
     const c0 = (horizontal ? pos * W : pos * H) - len / 2, c1 = c0 + len
-    const z0 = fx.kind === 'window' ? wallH * 0.45 : 0, z1 = fx.kind === 'window' ? wallH * 0.82 : Math.min(wallH * 0.74, 2.8)
+    const z0 = fx.kind === 'window' ? wallH * 0.45 : 0, z1 = fx.kind === 'window' ? wallH * 0.82 : Math.min(wallH * 0.9, 4.4)
     const fill = fx.kind === 'window' ? pal.window : pal.door, edge = fx.kind === 'window' ? pal.windowEdge : pal.doorEdge
     const at = (c, z) => fx.wall === 'top' ? P.p(c, 0.02, z) : fx.wall === 'bottom' ? P.p(c, H - 0.02, z) : fx.wall === 'left' ? P.p(0.02, c, z) : P.p(W - 0.02, c, z)
     if (isBack[fx.wall]) {
@@ -189,16 +189,16 @@ export function buildScene(model, cam, vp, opts = {}) {
     objs.push({ type: 'office', fx, rect: officeRect({ x: fx.x ?? W / 2, y: fx.y ?? H / 2 }) })
   }
   const ordered = orderObjects(objs, e)
-  const labels = []
+  const labels = [], tagCands = []
 
   for (const o of ordered) {
     if (o.type === 'office') {
-      const { x, y, w, h } = o.rect, bodyH = Math.min(wallH * 0.65, 2.4)
+      const { x, y, w, h } = o.rect, bodyH = Math.min(wallH * 0.85, 3.8)
       const body = cuboid(P, x, x + w, y, y + h, 0, bodyH)
       for (const f of FACES) if (eyeSees(f.n, e)) poly(f.idx.map(i => body[i]), f.id === 'top' ? shade(pal.office, 1.1) : shade(pal.office, f.f), shade(pal.office, 0.6), 1)
-      const roof = cuboid(P, x - 0.2, x + w + 0.2, y - 0.2, y + h + 0.2, bodyH, bodyH + 0.35)
+      const roof = cuboid(P, x - 0.35, x + w + 0.35, y - 0.35, y + h + 0.35, bodyH, bodyH + 0.5)
       for (const f of FACES) if (eyeSees(f.n, e)) poly(f.idx.map(i => roof[i]), f.id === 'top' ? shade(pal.officeRoof, 1.15) : shade(pal.officeRoof, f.f), shade(pal.officeRoof, 0.6), 1)
-      const top = P.p(x + w / 2, y + h / 2, bodyH + 0.35)
+      const top = P.p(x + w / 2, y + h / 2, bodyH + 0.5)
       labels.push({ k: 'pill', x: top[0], y: top[1] - 14, w: 0, h: 0, text: '사무실', size: 12, fill: pal.pillBg, color: pal.pillText, dot: pal.officeRoof, hit: null })
       continue
     }
@@ -215,9 +215,8 @@ export function buildScene(model, cam, vp, opts = {}) {
       for (let s = 0; s <= ln.slot_count; s++) { const p = P.p(z.x + s * z.cw, y0, 0), q = P.p(z.x + s * z.cw, y1, 0); line(p[0], p[1], q[0], q[1], mark, 1) }
     })
     // 박스: 먼 줄/칸부터, 아래층부터
-    const bh = boxHeight(z), mx = z.cw * 0.07, my = z.ch * 0.07
+    const bh = boxHeight(z), mx = z.cw * 0.035, my = z.ch * 0.035
     const lineOrder = z.lines.map((_, i) => i); if (e[1] < 0) lineOrder.reverse()
-    const has = (li, slot, tier) => { const ln = z.lines[li]; if (!ln || slot < 1 || slot > ln.slot_count) return false; const st = ln.stacks.get(slot); return !!st && st.length >= tier }
     for (const li of lineOrder) {
       const ln = z.lines[li]
       const slots = []; for (let s = 1; s <= ln.slot_count; s++) slots.push(s); if (e[0] < 0) slots.reverse()
@@ -226,7 +225,7 @@ export function buildScene(model, cam, vp, opts = {}) {
         const x0 = z.x + (s - 1) * z.cw + mx, x1 = z.x + s * z.cw - mx, y0 = z.y + li * z.ch + my, y1 = z.y + (li + 1) * z.ch - my
         for (let k = 0; k < st.length; k++) {
           const b = st[k], tier = b.tier
-          const z0 = (tier - 1) * bh, z1 = tier * bh - bh * 0.035
+          const z0 = (tier - 1) * bh, z1 = tier * bh - bh * 0.02
           const c = cuboid(P, x0, x1, y0, y1, z0, z1)
           const isHl = hl && hl.has(b.id), isFocus = opts.focusId === b.id
           const alpha = hl && !isHl ? 0.28 : 1
@@ -234,27 +233,34 @@ export function buildScene(model, cam, vp, opts = {}) {
           const stroke = isFocus ? '#ff4f93' : isHl ? '#f59e0b' : shade(z.color, 0.55)
           const lw = isFocus ? 3 : isHl ? 2.4 : 1
           const topHidden = st[k + 1]?.tier === tier + 1
-          const cull = { px: has(li, s + 1, tier), nx: has(li, s - 1, tier), py: has(li + 1, s, tier), ny: has(li - 1, s, tier), top: topHidden }
-          let bestSide = null, topFace = null
-          for (const f of FACES) {
-            if (!eyeSees(f.n, e) || cull[f.id]) continue
+          const sides = []; let topFace = null
+          for (const f of FACES) {                       // 카메라 쪽을 보는 면은 모두 그림 (옆 박스와 붙어 있어도 투명하게 비지 않음)
+            if (!eyeSees(f.n, e)) continue
             const pts = f.idx.map(i => c[i]), fl = flat(pts)
             poly(pts, f.id === 'top' ? shade(z.color, 1.1) : shade(z.color, f.f), stroke, lw, { alpha, hit, glow: isHl || isFocus })
             if (f.id === 'top') {
               topFace = fl
-              const ym = (y0 + y1) / 2, dy = (y1 - y0) * 0.11, zt = z1 + 0.002
-              poly([P.p(x0, ym - dy, zt), P.p(x1, ym - dy, zt), P.p(x1, ym + dy, zt), P.p(x0, ym + dy, zt)], 'rgba(255,255,255,0.55)', null, 0, { alpha, hit })
-            } else { const a = area(fl); if (!bestSide || a > bestSide.a) bestSide = { a, fl } }
+              if (!topHidden) {
+                const ym = (y0 + y1) / 2, dy = (y1 - y0) * 0.11, zt = z1 + 0.002
+                poly([P.p(x0, ym - dy, zt), P.p(x1, ym - dy, zt), P.p(x1, ym + dy, zt), P.p(x0, ym + dy, zt)], 'rgba(255,255,255,0.55)', null, 0, { alpha, hit })
+              }
+            } else sides.push({ a: area(fl), fl })
           }
-          // 번호 라벨: 가장 잘 보이는 옆면, 옆면이 너무 작으면(위에서 본 경우) 맨 위 박스의 윗면
           const num = String(b.box_number)
-          let face = null
-          if (bestSide && bestSide.a > 260) face = bestSide
-          else if (topFace && !topHidden) { const a = area(topFace); if (a > 300) face = { a, fl: topFace } }
-          if (face) {
-            const [cx, cy] = centroid(face.fl), ch = Math.sqrt(face.a)
-            const size = Math.max(7, Math.min(18, ch * 0.4, (ch * 0.92) / Math.max(1.6, textW(num, 1))))
-            if (size >= 7) items.push({ k: 'text', x: cx, y: cy, text: num, size, color: pal.boxText, bold: true, alpha })
+          if (opts.allNumbers) {                         // 번호 모두 보기: 박스 가운데에 번호표를 따로 띄움 (가려진 박스도 번호가 보이게)
+            const cp = P.p((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2)
+            tagCands.push({ id: b.id, text: num, x: cp[0], y: cp[1], d: cp[2], hl: isHl || isFocus, alpha })
+          } else {
+            // 번호 라벨: 가장 잘 보이는 옆면에, 다른 옆면도 충분히 크면 거기에도. 옆면이 너무 작으면(위에서 본 경우) 맨 위 박스의 윗면
+            sides.sort((p, q) => q.a - p.a)
+            const put = face => {
+              const [cx, cy] = centroid(face.fl), ch = Math.sqrt(face.a)
+              const size = Math.max(7, Math.min(18, ch * 0.4, (ch * 0.92) / Math.max(1.6, textW(num, 1))))
+              if (size >= 7) items.push({ k: 'text', x: cx, y: cy, text: num, size, color: pal.boxText, bold: true, alpha })
+            }
+            if (sides[0] && sides[0].a > 260) put(sides[0])
+            else if (topFace && !topHidden) { const a = area(topFace); if (a > 300) put({ a, fl: topFace }) }
+            if (sides[1] && sides[1].a > 520) put(sides[1])
           }
         }
       }
@@ -269,6 +275,18 @@ export function buildScene(model, cam, vp, opts = {}) {
   for (const l of labels) { l.w = textW(l.text, l.size) + 26; l.h = l.size + 10 }  // 이름표는 글자 크기를 알아야 폭이 정해져서 마지막에 채움
   separateLabels(labels)
   for (const l of labels) items.push(l)
+  if (tagCands.length) {                                  // 번호표: 앞쪽 박스부터, 이미 놓인 번호표/구역 이름표와 겹치면 건너뜀 (확대하면 더 많이 보임)
+    const CELL = 40, bucket = new Map(), keys = r => { const out = []; for (let gx = Math.floor((r.x - r.w / 2) / CELL); gx <= Math.floor((r.x + r.w / 2) / CELL); gx++) for (let gy = Math.floor((r.y - r.h / 2) / CELL); gy <= Math.floor((r.y + r.h / 2) / CELL); gy++) out.push(gx + ',' + gy); return out }
+    const clash = r => keys(r).some(k => (bucket.get(k) || []).some(q => Math.abs(q.x - r.x) < (q.w + r.w) / 2 && Math.abs(q.y - r.y) < (q.h + r.h) / 2))
+    const add = r => keys(r).forEach(k => { if (!bucket.has(k)) bucket.set(k, []); bucket.get(k).push(r) })
+    labels.forEach(add)
+    tagCands.sort((p, q) => p.d - q.d)
+    for (const c of tagCands) {
+      const w = textW(c.text, 11) + 12, h = 17, r = { x: c.x, y: c.y, w, h }
+      if (r.x < -w || r.y < -h || r.x > vp.w + w || r.y > vp.h + h || clash(r)) continue
+      add(r); items.push({ k: 'tag', ...r, text: c.text, size: 11, hl: c.hl, fill: pal.pillBg, color: pal.pillText, alpha: c.alpha, hit: { type: 'box', id: c.id } })
+    }
+  }
   return { items, B: P.B }
 }
 
@@ -286,7 +304,7 @@ export function hitTest(scene, x, y) {
     const it = scene.items[i]
     if (!it.hit) continue
     if (it.k === 'poly' && inPoly(it.pts, x, y)) return it.hit
-    if (it.k === 'pill' && x >= it.x - it.w / 2 && x <= it.x + it.w / 2 && y >= it.y - it.h / 2 && y <= it.y + it.h / 2) return it.hit
+    if ((it.k === 'pill' || it.k === 'tag') && x >= it.x - it.w / 2 && x <= it.x + it.w / 2 && y >= it.y - it.h / 2 && y <= it.y + it.h / 2) return it.hit
   }
   return null
 }
@@ -322,6 +340,10 @@ export function drawScene(ctx, scene, vp, opts = {}) {
     } else if (it.k === 'text') {
       ctx.font = `${it.bold ? '700 ' : ''}${it.size}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
       ctx.fillStyle = it.color; ctx.fillText(it.text, it.x, it.y)
+    } else if (it.k === 'tag') {
+      rr(ctx, it.x - it.w / 2, it.y - it.h / 2, it.w, it.h, it.h / 2); ctx.fillStyle = it.fill; ctx.fill()
+      ctx.lineWidth = it.hl ? 2.2 : 1; ctx.strokeStyle = it.hl ? '#f59e0b' : 'rgba(0,0,0,0.28)'; ctx.stroke()
+      ctx.font = `700 ${it.size}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = it.color; ctx.fillText(it.text, it.x, it.y + 0.5)
     } else if (it.k === 'pill') {
       ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2
       rr(ctx, it.x - it.w / 2, it.y - it.h / 2, it.w, it.h, it.h / 2); ctx.fillStyle = it.fill; ctx.fill()
@@ -346,6 +368,7 @@ export function sceneToSvg(scene, vp, bg) {
     } else if (it.k === 'line') o.push(`<line x1="${it.pts[0]}" y1="${it.pts[1]}" x2="${it.pts[2]}" y2="${it.pts[3]}" stroke="${it.stroke}" stroke-width="${it.lw}"/>`)
     else if (it.k === 'dot') o.push(`<circle cx="${it.x}" cy="${it.y}" r="${it.r}" fill="${it.fill}"/>`)
     else if (it.k === 'text') o.push(`<text x="${it.x}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif"${a}>${esc(it.text)}</text>`)
+    else if (it.k === 'tag') o.push(`<rect x="${it.x - it.w / 2}" y="${it.y - it.h / 2}" width="${it.w}" height="${it.h}" rx="${it.h / 2}" fill="${it.fill}" stroke="${it.hl ? '#f59e0b' : 'rgba(0,0,0,0.28)'}"${a}/><text x="${it.x}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif"${a}>${esc(it.text)}</text>`)
     else if (it.k === 'pill') {
       o.push(`<rect x="${it.x - it.w / 2}" y="${it.y - it.h / 2}" width="${it.w}" height="${it.h}" rx="${it.h / 2}" fill="${it.fill}" stroke="rgba(0,0,0,0.15)"/><circle cx="${it.x - it.w / 2 + 11}" cy="${it.y}" r="4" fill="${it.dot}"/><text x="${it.x - it.w / 2 + 20}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" dominant-baseline="central" font-family="sans-serif">${esc(it.text)}</text>`)
     }
