@@ -142,5 +142,5 @@ export function createThreeRenderer(canvas, T) {
     for (const o of S.env) free(o); if (S.grid) free(S.grid); for (const k of ['solid', 'ghost']) if (S[k]) free(S[k])
     boxGeo.dispose(); renderer.dispose(); if (renderer.forceContextLoss) renderer.forceContextLoss()
   }
-  return { canvas, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: cam => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.wallH } }
+  return { canvas, faceText: false, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: cam => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.wallH } }
 }

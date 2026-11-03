@@ -16,6 +16,7 @@ import * as C from './cam3d'
 const FONT = 'system-ui, -apple-system, "Segoe UI", "Noto Sans KR", "Malgun Gothic", sans-serif'
 const ease = k => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2)
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v))
+const FACE_MIN_AREA = 220     // 박스 면에 쓴 번호가 읽힐 만큼 크게 보이는 면적(px²) — 이보다 작으면 읽히지 않아서 찾은 박스에만 안내 표시를 남김
 const NUM_MIN_AREA = 150      // 보이는 면적(px²)이 이보다 작으면 면에 번호를 쓰지 않음
 const TAG_MIN_PITCH = 30      // 한 칸이 화면에서 이보다 작으면 번호표(가려진 박스)를 띄우지 않음 (작은 3D 화면이 번호표로 뒤덮이지 않게)
 
@@ -42,7 +43,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [spread, setSpread] = useState(SPREAD_DEFAULT), [maxTier, setMaxTier] = useState(0), [xray, setXray] = useState(false)
-  const [sec, setSec] = useState(0), [numMode, setNumMode] = useState('all'), [panMode, setPanMode] = useState(false), [panel, setPanel] = useState(false)
+  const [sec, setSec] = useState(0), [numMode, setNumMode] = useState(engine === 'three' ? 'all' : 'auto'), [panMode, setPanMode] = useState(false), [panel, setPanel] = useState(false)
   const [lowDetail, setLowDetail] = useState(false), [error, setError] = useState(''), [themeKey, setThemeKey] = useState(0), [ready, setReady] = useState(0)
   const framing = useRef('home')                       // 처음/위에서/앞에서/옆에서 중 지금 보는 방식 (직접 움직이면 null → 화면 크기가 바뀌어도 그대로 둠)
   const R = useRef(null), cam = useRef(null), camKey = useRef(null), tween = useRef(null), dirty = useRef(true), visDirty = useRef(true), moveUntil = useRef(0), lastDraw = useRef(0)
@@ -196,7 +197,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
       const ov = ovRef.current, r = R.current, Lc = L.current; if (!ov || !r || !r.inst || !cam.current) return
       const W = Lc.size.w, H = Lc.size.h, aspect = W / H, ctx = ov.getContext('2d'), P = C.makeProjector(cam.current, aspect, W, H), meta = r.inst.meta
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-      const placed = [], shown = [], tagsShown = []; hits.current = { pills: [], labels: [] }
+      const placed = [], shown = [], tagsShown = [], faces = []; hits.current = { pills: [], labels: [] }
       const free = q => !placed.some(o => Math.abs(o.x - q.x) < (o.w + q.w) / 2 && Math.abs(o.y - q.y) < (o.h + q.h) / 2) && q.x > -q.w && q.y > -q.h && q.x < W + q.w && q.y < H + q.h
       const rrect = (x, y, w, h, rad) => { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - w / 2, y - h / 2, w, h, rad) : ctx.rect(x - w / 2, y - h / 2, w, h) }
       const pill = (x, y, text, size, o = {}) => {
@@ -214,11 +215,13 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
       // 2) 번호 (실제로 보이는 박스는 보이는 곳 위에) — 움직이는 동안은 숨김
       const hl = Lc.highlight && Lc.highlight.size ? Lc.highlight : null, fid = Lc.focus?.boxId || null
       const list = (moving || Lc.numMode === 'off') ? [] : vis.current.slice().sort((a, b) => ((hl && hl.has(meta[b.index]?.id)) - (hl && hl.has(meta[a.index]?.id))) || b.px - a.px)
-      let maxPx = 0; const labeledIdx = new Set()                // 면에 번호를 쓴 박스 (번호표를 또 붙이지 않음)
+      let maxPx = 0; const labeledIdx = new Set(), ft = !!r.faceText                // 면에 번호를 쓴 박스 (번호표를 또 붙이지 않음)
       for (const v of list) {
         const m = meta[v.index]; if (!m) continue; maxPx = Math.max(maxPx, v.px)
         const special = (hl && hl.has(m.id)) || m.id === fid
-        if (v.px < NUM_MIN_AREA && !special) continue
+        if (ft && v.px >= FACE_MIN_AREA) { faces.push(m.number); labeledIdx.add(v.index); continue }   // 번호가 박스 면에 직접 그려져 읽힘 → 따로 표시하지 않음
+        if (ft && !special) continue                                                                       // 너무 작아서 안 읽힘 (확대하면 보임)
+        if (!ft && v.px < NUM_MIN_AREA && !special) continue
         const size = clamp(Math.sqrt(v.px) * 0.4, special ? 11 : 9, 18)
         ctx.font = `700 ${size}px ${FONT}`; const w = ctx.measureText(m.number).width + size * 1.1, q = { x: v.x, y: v.y, w, h: size * 1.55 }
         if (!special && !free(q)) continue
@@ -256,9 +259,9 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
         const w = ctx.measureText(text).width + 18, h = 24, x = clamp(hv.x + 14 + w / 2, w / 2 + 4, W - w / 2 - 4), y = clamp(hv.y - 22, h / 2 + 4, H - h / 2 - 4)
         rrect(x, y, w, h, 12); ctx.fillStyle = 'rgba(17,24,39,0.92)'; ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText(text, x, y + 0.5)
       }
-      const low = !moving && Lc.numMode !== 'off' && vis.current.length > 0 && shown.length === 0 && tagsShown.length === 0 && maxPx < NUM_MIN_AREA
+      const low = !moving && Lc.numMode !== 'off' && vis.current.length > 0 && shown.length === 0 && tagsShown.length === 0 && faces.length === 0 && maxPx < (ft ? FACE_MIN_AREA : NUM_MIN_AREA)
       if (low !== lowRef.current) { lowRef.current = low; setLowDetail(low) }
-      ov.dataset.labels = shown.join(','); ov.dataset.tags = tagsShown.join(','); ov.dataset.visible = String(vis.current.length); ov.dataset.hover = hv.index >= 0 && meta[hv.index] ? meta[hv.index].number : ''
+      ov.dataset.labels = shown.join(','); ov.dataset.tags = tagsShown.join(','); ov.dataset.faces = faces.join(','); ov.dataset.visible = String(vis.current.length); ov.dataset.hover = hv.index >= 0 && meta[hv.index] ? meta[hv.index].number : ''
     }
     const loop = t => {
       raf = requestAnimationFrame(loop)
@@ -270,7 +273,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
       if (!dirty.current && !visDirty.current && !(pulsing && t - lastDraw.current > 66)) return
       lastDraw.current = t; dirty.current = false
       const aspect = Lc.size.w / Lc.size.h, sec = secObj(), moving = performance.now() < moveUntil.current || !!gesture.current
-      r.draw({ cam: cam.current, aspect, time: t / 1000, bg: Lc.theme.bg, hover: hover.current.index, sec, gridColor: Lc.theme.light ? [0.1, 0.14, 0.25] : [1, 1, 1], gridAlpha: Lc.theme.light ? 0.14 : 0.16 })
+      r.draw({ cam: cam.current, aspect, time: t / 1000, bg: Lc.theme.bg, hover: hover.current.index, sec, showText: Lc.numMode !== 'off', gridColor: Lc.theme.light ? [0.1, 0.14, 0.25] : [1, 1, 1], gridAlpha: Lc.theme.light ? 0.14 : 0.16 })
       if (visDirty.current && !moving) { vis.current = r.visibility(cam.current, aspect, sec, ghostPick()); visDirty.current = false }
       overlay(t, moving)
     }
@@ -342,7 +345,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
           </div>
           <div>
             <div className="text-[11px] font-bold text-surface-200 mb-1">번호</div>
-            <div className="flex flex-wrap gap-1">{[['all', '가려진 박스도'], ['auto', '보이는 것만'], ['off', '끄기']].map(([k, label]) => <button key={k} type="button" onClick={() => setNumMode(k)} className={chip(numMode === k)}>{label}</button>)}</div>
+            <div className="flex flex-wrap gap-1">{[['auto', '박스 면에만'], ['all', '가려진 박스도'], ['off', '끄기']].map(([k, label]) => <button key={k} type="button" onClick={() => setNumMode(k)} className={chip(numMode === k)}>{label}</button>)}</div>
           </div>
           <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={xray} onChange={e => setXray(e.target.checked)} /> 반투명으로 보기 <span className="text-surface-500">(모든 박스가 비쳐 보여요)</span></label>
           <p className="text-[10px] text-surface-500 leading-relaxed">3D 화면을 한 번 누른 뒤: 방향키 / W A S D = 이동 · Q E = 돌리기 · + − = 확대 (Shift 를 같이 누르면 크게)</p>
