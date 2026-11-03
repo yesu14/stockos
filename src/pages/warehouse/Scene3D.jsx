@@ -2,6 +2,7 @@
 //  상품찾기 — 3D 창고 뷰어 (캔버스)
 //  왼쪽 끌기=돌리기, 오른쪽 끌기(또는 Shift+끌기, ✋ 이동 모드)=바닥 위 좌우앞뒤 이동, 휠/두 손가락=확대, 방향키·WASD=이동, 클릭=박스 선택
 // ═══════════════════════════════════════════════════════════
+import ViewPicker from './ViewPicker'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Crosshair, Layers, Move, SlidersHorizontal } from 'lucide-react'
 import { Btn, useFullscreen } from './ui'
@@ -27,7 +28,7 @@ function lerpCam(a, b, e) {
 }
 const TWO_PI = Math.PI * 2
 
-export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onSwitch }) {
+export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onEngine }) {
   const wh = model.warehouse
   const { ref: frameRef, full, toggle } = useFullscreen()
   const boxRef = useRef(null), canvasRef = useRef(null)
@@ -196,7 +197,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
       <div className="flex items-center gap-2 shrink-0">
         <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고 <span className="text-[10px] font-normal text-surface-400">(예전 방식)</span></h2>
         <div className="flex-1" />
-        {onSwitch && <Btn size="sm" variant="soft" onClick={onSwitch}>새 3D로 보기</Btn>}
+        {onEngine ? <ViewPicker value="classic" onChange={onEngine} /> : <span className="text-[10px] text-surface-500">이 기기에서는 새 3D 를 쓸 수 없어요</span>}
         {full && <Btn size="sm" variant="soft" onClick={toggle}>닫기 ✕</Btn>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown} className={`relative rounded-[28px] overflow-hidden border border-surface-700 touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 ${full ? 'flex-1 min-h-0' : 'h-[300px] sm:h-[340px]'}`}

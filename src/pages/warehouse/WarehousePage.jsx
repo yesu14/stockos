@@ -219,10 +219,9 @@ export default function WarehousePage() {
               {view3d !== 'classic' && glSupported
                 ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                     onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
-                    onSwitch={() => switch3d('classic')}
                     onFail={() => { if (view3d === 'three') { switch3d('gl', false); toast('Three.js 를 불러오지 못해서 기본 3D 로 바꿨어요 (인터넷 연결을 확인해 주세요)', { icon: 'ℹ️' }) } else { switch3d('classic'); toast('이 기기에서는 새 3D가 잘 안 돼서 예전 3D로 바꿨어요', { icon: 'ℹ️' }) } }} />
                 : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
-                    onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onSwitch={glSupported ? () => switch3d('gl') : undefined} />}
+                    onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={glSupported ? switch3d : undefined} />}
             </section>
             <section className={card}>
               <SearchPanel model={model} query={query} setQuery={setQuery} results={results} onLocate={locate} onOpen={setBoxId} />

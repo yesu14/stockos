@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Move, SlidersHorizontal } from 'lucide-react'
 import { useFullscreen } from './ui'
+import ViewPicker from './ViewPicker'
 import { hexToRgb, rgbToHex, locationText } from './whLogic'
 import { DARK_PALETTE, LIGHT_PALETTE, SPREAD_DEFAULT, wallHeight, tierGeom } from './render3d'
 import { createRenderer } from './gl3d'
@@ -35,7 +36,7 @@ function presetCam(kind, model, aspect, spread) {
   return kind === 'front' ? { ...d, yaw: Math.PI / 2, pitch: 0.2 } : { ...d, yaw: 0, pitch: 0.2 }
 }
 
-export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onSwitch, onFail, engine = 'gl', onEngine }) {
+export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine }) {
   const wh = model.warehouse
   const { ref: frameRef, full, toggle } = useFullscreen()
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
@@ -284,11 +285,10 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   return (
     <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col gap-2'}>
       <div className="flex items-center gap-2 shrink-0 flex-wrap">
-        <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고{engine === 'three' && <span className="ml-1.5 text-[10px] font-normal text-primary-300">Three.js</span>}</h2>
+        <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고</h2>
         <div className="flex-1" />
         {wh && <button type="button" className={`${btn} ${panel ? on : ''}`} style={panel ? { color: '#fff' } : undefined} aria-pressed={panel} onClick={() => setPanel(v => !v)}><span className="inline-flex items-center gap-1"><SlidersHorizontal size={13} /> 보기 설정</span></button>}
-        {onEngine && <button type="button" className={btn} title={engine === 'three' ? '직접 만든 3D 로 바꿔요' : 'Three.js 라이브러리로 그리는 3D 로 바꿔요 (인터넷이 필요해요)'} onClick={() => onEngine(engine === 'three' ? 'gl' : 'three')}>{engine === 'three' ? '기본 3D로' : 'Three.js로'}</button>}
-        {onSwitch && <button type="button" className={btn} title="예전 방식의 3D 로 바꿔요" onClick={onSwitch}>예전 3D로</button>}
+        {onEngine && <ViewPicker value={engine === 'three' ? 'three' : 'gl'} onChange={onEngine} />}
         {full && <button type="button" className={btn} onClick={toggle}>닫기 ✕</button>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown}
@@ -297,15 +297,17 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onPointerLeave={onPointerLeave} onClick={e => { if (e.target.closest('[data-ctl]')) return; fireTap() }} onContextMenu={e => e.preventDefault()}>
         <canvas ref={glRef} data-testid="scene3d-canvas" style={{ width: size.w, height: size.h }} className="absolute inset-0" />
         <canvas ref={ovRef} data-testid="scene3d-overlay" style={{ width: size.w, height: size.h }} className="absolute inset-0 pointer-events-none" />
-        {error && <div className="absolute inset-0 flex items-center justify-center p-6 text-center bg-surface-950/90"><div><div className="text-4xl mb-2">⚠️</div><p className="text-sm font-bold text-white">{error}</p>{onSwitch && <button type="button" className={`${btn} mt-3`} onClick={onSwitch}>예전 3D 로 보기</button>}</div></div>}
+        {error && <div className="absolute inset-0 flex items-center justify-center p-6 text-center bg-surface-950/90"><div><div className="text-4xl mb-2">⚠️</div><p className="text-sm font-bold text-white">{error}</p>{onEngine && <button type="button" className={`${btn} mt-3`} onClick={() => onEngine('classic')}>예전 3D 로 보기</button>}</div></div>}
         {!wh && <div className="absolute inset-0 flex items-center justify-center p-6 text-center pointer-events-none"><div><div className="text-5xl mb-2">🧊</div><p className="text-sm font-bold text-white">창고를 그리면 여기에 3D로 보여요</p></div></div>}
         {wh && !error && <>
-          <div data-ctl className="absolute left-3 top-3 flex gap-1.5 flex-wrap max-w-[70%]">
+          <div className="absolute left-3 right-3 top-3 flex items-start justify-between gap-2">
+          <div data-ctl className="flex gap-1.5 flex-wrap min-w-0">
             {[['home', '처음'], ['top', '위에서'], ['front', '앞에서'], ['side', '옆에서']].map(([k, label]) => <button key={k} type="button" className={btn} aria-label={`${label} 보기`} onClick={() => preset(k)}>{label}</button>)}
           </div>
-          <div data-ctl className="absolute right-3 top-3 flex gap-1.5">
+          <div data-ctl className="flex gap-1.5 shrink-0">
             <button type="button" className={`${btn} ${panMode ? on : ''}`} style={panMode ? { color: '#fff' } : undefined} aria-label="이동 모드" aria-pressed={panMode} title="켜면 끌어서 이동해요 (오른쪽 버튼이 없는 태블릿/폰용)" onClick={() => setPanMode(v => !v)}><span className="inline-flex items-center gap-1"><Move size={13} /> 이동</span></button>
             <button type="button" className={sq + ' !w-8 !h-8 !rounded-xl'} aria-label="전체화면" title={full ? '전체화면 닫기' : '전체화면'} onClick={toggle}>{full ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
+          </div>
           </div>
           <div data-ctl className="absolute right-3 bottom-3 grid grid-cols-2 gap-1.5">
             <button type="button" className={sq} aria-label="확대" onClick={() => zoomBy(1 / 1.3)}><Plus size={16} /></button>
