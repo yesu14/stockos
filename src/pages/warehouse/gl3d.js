@@ -7,6 +7,19 @@ import { hexToRgb, fixtureLen, officeRect } from './whLogic'
 import { tierGeom, wallHeight, SPREAD_DEFAULT } from './render3d'
 import { viewProjection, basisOf, depthRange } from './cam3d'
 
+// ── 박스 면에 쓰는 번호 글자판 ─────────────────────────────
+const GFONT = 'system-ui, -apple-system, "Segoe UI", "Noto Sans KR", "Malgun Gothic", sans-serif'
+const G_CW = 60, G_CH = 96, G_COLS = 16, G_MAX = 256, TXT_MAX = 8          // 글자 칸(폭×높이), 한 줄 칸 수, 최대 글자 종류, 박스 하나에 쓸 최대 글자 수
+const STRIDE = 19                                                          // 박스 하나의 데이터 수: 위치3 크기3 색4 상태1 + 글자 8
+function buildAtlas(chars) {
+  const rows = Math.max(1, Math.ceil(chars.length / G_COLS)), cv = document.createElement('canvas'); cv.width = G_COLS * G_CW; cv.height = rows * G_CH
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.font = `800 ${Math.round(G_CH * 0.66)}px ${GFONT}`
+  chars.forEach((c, i) => {
+    const x = (i % G_COLS) * G_CW + G_CW / 2, y = Math.floor(i / G_COLS) * G_CH + G_CH * 0.78, w = ctx.measureText(c).width
+    if (w > G_CW * 0.78) { ctx.save(); ctx.translate(x, y); ctx.scale((G_CW * 0.78) / w, 1); ctx.fillText(c, 0, 0); ctx.restore() } else ctx.fillText(c, x, y)
+  })
+  return { cv, rows }
+}
 const LIGHT = (() => { const v = [-0.4, -0.5, 0.77], l = Math.hypot(...v); return v.map(x => x / l) })()
 const rgbf = hex => hexToRgb(hex).map(v => v / 255)
 
@@ -38,14 +51,17 @@ const BOX_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNormal; layout(location=2) in vec2 aUv;
 layout(location=3) in vec3 iCenter; layout(location=4) in vec3 iSize; layout(location=5) in vec4 iColor; layout(location=6) in float iState;
+layout(location=7) in vec4 iC0; layout(location=8) in vec4 iC1;
 uniform mat4 uVP; uniform vec3 uEye; uniform vec3 uFwd; uniform float uSecOn; uniform float uSecDist; uniform float uIdBase;
 out vec3 vN; out vec2 vUv; out vec4 vColor; out float vState; out vec3 vId; flat out float vIdx;
+out vec3 vLocal; out vec3 vHalf; flat out vec4 vC0; flat out vec4 vC1;
 void main() {
   vec3 world = iCenter + aPos * iSize;
   float depth = dot(iCenter - uEye, uFwd);
   float idx = uIdBase + float(gl_InstanceID);
   int id = int(idx) + 1;
   vN = aNormal; vUv = aUv; vColor = iColor; vState = iState; vIdx = idx;
+  vLocal = aPos * iSize; vHalf = iSize * 0.5; vC0 = iC0; vC1 = iC1;
   vId = vec3(float(id & 255), float((id >> 8) & 255), float((id >> 16) & 255)) / 255.0;
   bool hidden = uSecOn > 0.5 && depth < uSecDist;
   gl_Position = hidden ? vec4(2.0, 2.0, 2.0, 1.0) : uVP * vec4(world, 1.0);
@@ -53,8 +69,36 @@ void main() {
 const BOX_FS = `#version 300 es
 precision highp float;
 in vec3 vN; in vec2 vUv; in vec4 vColor; in float vState; in vec3 vId; flat in float vIdx;
+in vec3 vLocal; in vec3 vHalf; flat in vec4 vC0; flat in vec4 vC1;
 uniform vec3 uLight; uniform float uPass; uniform float uTime; uniform float uHover;
+uniform sampler2D uGlyph; uniform vec2 uGlyphGrid; uniform float uShowText;
 out vec4 o;
+// 박스의 한 면(법선 n)의 한가운데에 번호를 그림. 옆면은 위쪽이 위, 윗면은 평면도와 같은 방향(오른쪽=+x, 위쪽=평면도 위), 어느 면에서도 거울처럼 뒤집히지 않음
+float faceText(vec3 n) {
+  if (uShowText < 0.5) return 0.0;
+  float cnt = step(0.0, vC0.x) + step(0.0, vC0.y) + step(0.0, vC0.z) + step(0.0, vC0.w) + step(0.0, vC1.x) + step(0.0, vC1.y) + step(0.0, vC1.z) + step(0.0, vC1.w);
+  if (cnt < 0.5) return 0.0;
+  vec3 tx, ty;
+  if (n.z > 0.5) { tx = vec3(1.0, 0.0, 0.0); ty = vec3(0.0, -1.0, 0.0); }
+  else if (n.z < -0.5) { tx = vec3(1.0, 0.0, 0.0); ty = vec3(0.0, 1.0, 0.0); }
+  else { tx = vec3(n.y, -n.x, 0.0); ty = vec3(0.0, 0.0, 1.0); }
+  vec2 p = vec2(dot(vLocal, tx), dot(vLocal, ty));
+  vec2 hf = vec2(dot(abs(tx), vHalf), dot(abs(ty), vHalf));
+  const float CA = 0.5, SQ = 0.8;     // 글자 간격(높이 대비) / 글자 칸의 가운데 80% 만 씀 (숫자 사이가 벌어지지 않게)
+  float th = min(hf.y * 2.0 * 0.56, hf.x * 2.0 * 0.86 / (cnt * CA));
+  float u = p.x / (CA * th) + cnt * 0.5, fy = p.y / th + 0.5, ci = floor(u), fx = u - ci;
+  vec2 dx = vec2(dFdx(u), dFdx(fy)), dy = vec2(dFdy(u), dFdy(fy));
+  float thPx = th / max(length(vec2(dFdx(p.y), dFdy(p.y))), 1e-6);
+  float fade = smoothstep(4.0, 8.0, thPx);       // 글자가 너무 작아 뭉개질 때는 서서히 사라짐 (멀리서 지저분한 점처럼 보이지 않게)
+  if (fade <= 0.0) return 0.0;
+  int ki = int(clamp(ci, 0.0, cnt - 1.0));
+  float gi = ki < 4 ? vC0[ki] : vC1[ki - 4];
+  float gc = mod(gi, uGlyphGrid.x), gr = floor(gi / uGlyphGrid.x);
+  vec2 uv = vec2((gc + 0.5 + (fx - 0.5) * SQ) / uGlyphGrid.x, (gr + 1.0 - fy) / uGlyphGrid.y);
+  vec2 gx = vec2(dx.x * SQ / uGlyphGrid.x, -dx.y / uGlyphGrid.y), gy = vec2(dy.x * SQ / uGlyphGrid.x, -dy.y / uGlyphGrid.y);
+  float inside = step(0.0, ci) * step(ci, cnt - 1.0) * step(abs(fy - 0.5), 0.5);
+  return textureGrad(uGlyph, uv, gx, gy).a * inside * fade;
+}
 void main() {
   if (uPass > 0.5) { o = vec4(vId, 1.0); return; }
   float s = 0.52 + 0.48 * (0.5 + 0.5 * clamp(dot(normalize(vN), uLight), -1.0, 1.0));
@@ -67,6 +111,9 @@ void main() {
   if (vState > 0.5 && vState < 1.5) { col = mix(col, vec3(1.0, 0.72, 0.15), 0.3 + 0.22 * pulse); col = mix(col, vec3(0.42, 0.26, 0.0), line * 0.6); }
   if (vState > 1.5) { col = mix(col, vec3(1.0, 0.31, 0.58), 0.38 + 0.2 * pulse); }
   if (abs(vIdx - uHover) < 0.5) col = mix(col, vec3(1.0), 0.3);
+  float tm = faceText(normalize(vN));
+  col = mix(col, vec3(0.07, 0.10, 0.17), tm);
+  if (a < 0.999 && a > 0.2) a = max(a, tm * 0.9);        // 반투명(속 보기)일 때도 번호는 또렷하게
   if (a < 0.999) a = max(a, line * 0.6);
   o = vec4(col, a);
 }`
@@ -174,7 +221,7 @@ export function createRenderer(canvas) {
   const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' })
   if (!gl) throw new Error('이 기기에서는 3D(WebGL2)를 쓸 수 없어요')
   const envP = program(gl, ENV_VS, ENV_FS, ['uVP', 'uLight', 'uGrid', 'uGridColor', 'uGridAlpha'])
-  const boxP = program(gl, BOX_VS, BOX_FS, ['uVP', 'uEye', 'uFwd', 'uSecOn', 'uSecDist', 'uIdBase', 'uLight', 'uPass', 'uTime', 'uHover'])
+  const boxP = program(gl, BOX_VS, BOX_FS, ['uVP', 'uEye', 'uFwd', 'uSecOn', 'uSecDist', 'uIdBase', 'uLight', 'uPass', 'uTime', 'uHover', 'uGlyph', 'uGlyphGrid', 'uShowText'])
   // 단위 상자: 면마다 4 꼭짓점 (위치, 법선, uv)
   const cubeV = [], cubeI = []
   for (const [n, u, v] of [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [0, 0, 1], [1, 0, 0]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [0, 1, 0], [1, 0, 0]]]) {
@@ -189,8 +236,8 @@ export function createRenderer(canvas) {
     const vao = gl.createVertexArray(); gl.bindVertexArray(vao)
     gl.bindBuffer(gl.ARRAY_BUFFER, cubeVB); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeIB)
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 32, 12); gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 32, 24)
-    gl.bindBuffer(gl.ARRAY_BUFFER, instB); const st = INST_FLOATS * 4, off = base * st
-    for (const [loc, size, o] of [[3, 3, 0], [4, 3, 12], [5, 4, 24], [6, 1, 40]]) { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, st, off + o); gl.vertexAttribDivisor(loc, 1) }
+    gl.bindBuffer(gl.ARRAY_BUFFER, instB); const st = STRIDE * 4, off = base * st
+    for (const [loc, size, o] of [[3, 3, 0], [4, 3, 12], [5, 4, 24], [6, 1, 40], [7, 4, 44], [8, 4, 60]]) { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, st, off + o); gl.vertexAttribDivisor(loc, 1) }
     gl.bindVertexArray(null); return vao
   }
   const envVao = data => {
@@ -198,7 +245,7 @@ export function createRenderer(canvas) {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 40, 12); gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 40, 24)
     gl.bindVertexArray(null); return { vao, buf, count: data.length / 10 }
   }
-  const S = { env: null, inst: null, vaoSolid: null, vaoGhost: null, fboS: null, fboF: null, buf: null }
+  const S = { env: null, inst: null, vaoSolid: null, vaoGhost: null, fboS: null, fboF: null, buf: null, glyph: null }
   const freeEnv = () => { if (S.env) for (const g of ['floor', 'solid', 'trans']) { gl.deleteVertexArray(S.env[g].vao); gl.deleteBuffer(S.env[g].buf) } }
   const makeFbo = (w, h) => {
     const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
@@ -214,9 +261,33 @@ export function createRenderer(canvas) {
     freeEnv(); if (!model.warehouse) { S.env = null; return }
     const e = buildEnv(model, spread, pal, activeZoneId); S.env = { floor: envVao(e.floor), solid: envVao(e.solid), trans: envVao(e.trans), wallH: e.wallH }
   }
+  /** 번호에 쓰인 글자가 글자판에 모두 있게 함 (없는 글자가 생기면 글자판을 다시 만듦) */
+  function ensureGlyphs(meta) {
+    const need = new Set(['?']); for (const m of meta) for (const ch of [...String(m.number ?? '')].slice(0, TXT_MAX)) need.add(ch)
+    if (S.glyph && [...need].every(c => S.glyph.map.has(c))) return
+    const chars = [...new Set([...(S.glyph ? S.glyph.map.keys() : []), ...need])].slice(0, G_MAX), { cv, rows } = buildAtlas(chars)
+    if (S.glyph) gl.deleteTexture(S.glyph.tex)
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, cv); gl.generateMipmap(gl.TEXTURE_2D)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    S.glyph = { tex, rows, map: new Map(chars.map((c, i) => [c, i])) }
+  }
+  /** 글자판을 3번 자리에 붙임 — 박스 판별용 임시 그림판(0번 자리를 씀)과 같은 텍스처를 읽고 쓰는 일이 없게 항상 전용 자리를 씀 */
+  function bindGlyph() {
+    if (!S.glyph) return
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, S.glyph.tex); gl.uniform1i(boxP.u.uGlyph, 3); gl.uniform2f(boxP.u.uGlyphGrid, G_COLS, S.glyph.rows); gl.activeTexture(gl.TEXTURE0)
+  }
   function setBoxes(model, o) {
     const inst = buildInstances(model, o); S.inst = inst
-    gl.bindBuffer(gl.ARRAY_BUFFER, instB); gl.bufferData(gl.ARRAY_BUFFER, inst.f32.byteLength ? inst.f32 : new Float32Array(INST_FLOATS), gl.DYNAMIC_DRAW)
+    ensureGlyphs(inst.meta)
+    const n = inst.meta.length, packed = new Float32Array(Math.max(1, n) * STRIDE).fill(-1), q = S.glyph.map.get('?')
+    inst.meta.forEach((m, i) => {
+      packed.set(inst.f32.subarray(i * INST_FLOATS, (i + 1) * INST_FLOATS), i * STRIDE)
+      const cs = [...String(m.number ?? '')].slice(0, TXT_MAX)
+      for (let k = 0; k < TXT_MAX; k++) packed[i * STRIDE + INST_FLOATS + k] = k < cs.length ? (S.glyph.map.get(cs[k]) ?? q) : -1
+    })
+    gl.bindBuffer(gl.ARRAY_BUFFER, instB); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW)
     if (S.vaoSolid) { gl.deleteVertexArray(S.vaoSolid); gl.deleteVertexArray(S.vaoGhost) }
     S.vaoSolid = boxVao(0); S.vaoGhost = boxVao(inst.nSolid)
     return inst
@@ -250,6 +321,7 @@ export function createRenderer(canvas) {
       drawEnv(S.env.trans); gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.disable(gl.BLEND)
     }
     gl.useProgram(boxP.p); camUniforms(a.cam, a.aspect, a.sec); gl.uniform1f(boxP.u.uPass, 0); gl.uniform1f(boxP.u.uTime, a.time || 0); gl.uniform1f(boxP.u.uHover, a.hover ?? -1)
+    gl.uniform1f(boxP.u.uShowText, a.showText === false ? 0 : 1); bindGlyph()
     drawBoxes('solid')
     if (S.inst && S.inst.nGhost) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); drawBoxes('ghost'); gl.depthMask(true); gl.disable(gl.BLEND) }
     gl.bindVertexArray(null)
@@ -258,7 +330,7 @@ export function createRenderer(canvas) {
   function renderIds(fbo, cam, aspect, sec, withGhost) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fb); gl.viewport(0, 0, fbo.w, fbo.h); gl.clearColor(0, 0, 0, 0); gl.clearDepth(1); gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); gl.frontFace(gl.CW)
-    gl.useProgram(boxP.p); camUniforms(cam, aspect, sec); gl.uniform1f(boxP.u.uPass, 1); gl.uniform1f(boxP.u.uTime, 0); gl.uniform1f(boxP.u.uHover, -1)
+    gl.useProgram(boxP.p); camUniforms(cam, aspect, sec); gl.uniform1f(boxP.u.uPass, 1); gl.uniform1f(boxP.u.uTime, 0); gl.uniform1f(boxP.u.uHover, -1); bindGlyph()
     drawBoxes('solid'); if (withGhost) drawBoxes('ghost')
     gl.bindVertexArray(null)
   }
@@ -301,8 +373,8 @@ export function createRenderer(canvas) {
   }
   function dispose() {
     freeEnv(); freeFbo(S.fboS); freeFbo(S.fboF); if (S.vaoSolid) { gl.deleteVertexArray(S.vaoSolid); gl.deleteVertexArray(S.vaoGhost) }
-    gl.deleteBuffer(cubeVB); gl.deleteBuffer(cubeIB); gl.deleteBuffer(instB); gl.deleteProgram(envP.p); gl.deleteProgram(boxP.p)
+    if (S.glyph) gl.deleteTexture(S.glyph.tex); gl.deleteBuffer(cubeVB); gl.deleteBuffer(cubeIB); gl.deleteBuffer(instB); gl.deleteProgram(envP.p); gl.deleteProgram(boxP.p)
     gl.getExtension('WEBGL_lose_context')?.loseContext()
   }
-  return { gl, canvas, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: (cam) => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.env ? S.env.wallH : 3 } }
+  return { gl, canvas, faceText: true, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: (cam) => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.env ? S.env.wallH : 3 } }
 }
