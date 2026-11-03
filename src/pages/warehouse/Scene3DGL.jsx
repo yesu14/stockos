@@ -9,6 +9,7 @@ import { useFullscreen } from './ui'
 import { hexToRgb, rgbToHex, locationText } from './whLogic'
 import { DARK_PALETTE, LIGHT_PALETTE, SPREAD_DEFAULT, wallHeight, tierGeom } from './render3d'
 import { createRenderer } from './gl3d'
+import { createThreeRenderer, loadThree } from './three3d'
 import * as C from './cam3d'
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", "Noto Sans KR", "Malgun Gothic", sans-serif'
@@ -34,14 +35,14 @@ function presetCam(kind, model, aspect, spread) {
   return kind === 'front' ? { ...d, yaw: Math.PI / 2, pitch: 0.2 } : { ...d, yaw: 0, pitch: 0.2 }
 }
 
-export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onSwitch, onFail }) {
+export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onSwitch, onFail, engine = 'gl', onEngine }) {
   const wh = model.warehouse
   const { ref: frameRef, full, toggle } = useFullscreen()
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [spread, setSpread] = useState(SPREAD_DEFAULT), [maxTier, setMaxTier] = useState(0), [xray, setXray] = useState(false)
   const [sec, setSec] = useState(0), [numMode, setNumMode] = useState('all'), [panMode, setPanMode] = useState(false), [panel, setPanel] = useState(false)
-  const [lowDetail, setLowDetail] = useState(false), [error, setError] = useState(''), [themeKey, setThemeKey] = useState(0)
+  const [lowDetail, setLowDetail] = useState(false), [error, setError] = useState(''), [themeKey, setThemeKey] = useState(0), [ready, setReady] = useState(0)
   const framing = useRef('home')                       // 처음/위에서/앞에서/옆에서 중 지금 보는 방식 (직접 움직이면 null → 화면 크기가 바뀌어도 그대로 둠)
   const R = useRef(null), cam = useRef(null), camKey = useRef(null), tween = useRef(null), dirty = useRef(true), visDirty = useRef(true), moveUntil = useRef(0), lastDraw = useRef(0)
   const gesture = useRef(null), pointers = useRef(new Map()), hover = useRef({ index: -1, x: 0, y: 0 }), vis = useRef([]), hits = useRef({ pills: [], labels: [] }), lowRef = useRef(false)
@@ -57,15 +58,19 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   const secObj = () => { const r = R.current, s = L.current.sec; if (!r || !s || !cam.current) return null; const [a, b] = r.depthRangeOf(cam.current); return { on: true, dist: a + (s / 100) * (b - a) } }
   const ghostPick = () => !(L.current.highlight && L.current.highlight.size)
 
-  // 엔진 시작 / 정리
+  // 엔진 시작 / 정리 (engine: 'gl' = 직접 만든 WebGL, 'three' = Three.js — 인터넷에서 불러오는 동안 잠깐 기다림)
   useEffect(() => {
     const cvs = glRef.current; if (!cvs) return
-    let r
-    try { r = createRenderer(cvs) } catch (e) { setError(e?.message || '3D 를 시작하지 못했어요'); onFail?.(e); return }
-    R.current = r
+    let alive = true, r = null
     const lost = e => { e.preventDefault(); setError('3D 화면이 멈췄어요 (기기 메모리가 부족할 수 있어요)'); onFail?.(new Error('context lost')) }
-    cvs.addEventListener('webglcontextlost', lost); dirty.current = true
-    return () => { cvs.removeEventListener('webglcontextlost', lost); r.dispose(); R.current = null }
+    cvs.addEventListener('webglcontextlost', lost)
+    ;(async () => {
+      try { r = engine === 'three' ? createThreeRenderer(cvs, await loadThree()) : createRenderer(cvs) }
+      catch (e) { if (alive) { setError(e?.message || '3D 를 시작하지 못했어요'); onFail?.(e) } return }
+      if (!alive) { r.dispose(); return }
+      R.current = r; dirty.current = true; setReady(n => n + 1)
+    })()
+    return () => { alive = false; cvs.removeEventListener('webglcontextlost', lost); if (R.current) { R.current.dispose(); R.current = null } }
   }, []) // eslint-disable-line
   useEffect(() => {
     const el = boxRef.current; if (!el) return
@@ -77,13 +82,13 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
     r.setSize(size.w, size.h, dpr); const ov = ovRef.current; if (ov) { ov.width = Math.round(size.w * dpr); ov.height = Math.round(size.h * dpr) }
     const Lc = L.current; if (framing.current && Lc.model.warehouse && cam.current && !tween.current) cam.current = framing.current === 'home' ? defaultCam(Lc.model, size.w / size.h, Lc.spread) : presetCam(framing.current, Lc.model, size.w / size.h, Lc.spread)
     dirty.current = visDirty.current = true
-  }, [size.w, size.h, dpr])
+  }, [size.w, size.h, dpr, ready])
   useEffect(() => {
     const mo = new MutationObserver(() => setThemeKey(k => k + 1)); mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] }); return () => mo.disconnect()
   }, [])
   // 데이터가 바뀌면 장면 다시 만들기
-  useEffect(() => { const r = R.current; if (!r || !wh) return; r.setEnv(model, spread, theme.pal, activeZoneId); dirty.current = true }, [model, spread, activeZoneId, theme, wh?.width, wh?.height]) // eslint-disable-line
-  useEffect(() => { const r = R.current; if (!r || !wh) return; r.setBoxes(model, { spread, maxTier, highlight, focusId: focus?.boxId || null, xray }); dirty.current = visDirty.current = true }, [model, spread, maxTier, highlight, focus?.boxId, xray, wh?.id]) // eslint-disable-line
+  useEffect(() => { const r = R.current; if (!r || !wh) return; r.setEnv(model, spread, theme.pal, activeZoneId); dirty.current = true }, [model, spread, activeZoneId, theme, wh?.width, wh?.height, ready]) // eslint-disable-line
+  useEffect(() => { const r = R.current; if (!r || !wh) return; r.setBoxes(model, { spread, maxTier, highlight, focusId: focus?.boxId || null, xray }); dirty.current = visDirty.current = true }, [model, spread, maxTier, highlight, focus?.boxId, xray, wh?.id, ready]) // eslint-disable-line
   // 처음 / 창고 크기가 바뀌면 카메라를 꼭 맞게 (보던 각도는 유지)
   useEffect(() => {
     if (!wh || size.w < 60) return
@@ -279,9 +284,10 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   return (
     <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col gap-2'}>
       <div className="flex items-center gap-2 shrink-0 flex-wrap">
-        <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고</h2>
+        <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고{engine === 'three' && <span className="ml-1.5 text-[10px] font-normal text-primary-300">Three.js</span>}</h2>
         <div className="flex-1" />
         {wh && <button type="button" className={`${btn} ${panel ? on : ''}`} style={panel ? { color: '#fff' } : undefined} aria-pressed={panel} onClick={() => setPanel(v => !v)}><span className="inline-flex items-center gap-1"><SlidersHorizontal size={13} /> 보기 설정</span></button>}
+        {onEngine && <button type="button" className={btn} title={engine === 'three' ? '직접 만든 3D 로 바꿔요' : 'Three.js 라이브러리로 그리는 3D 로 바꿔요 (인터넷이 필요해요)'} onClick={() => onEngine(engine === 'three' ? 'gl' : 'three')}>{engine === 'three' ? '기본 3D로' : 'Three.js로'}</button>}
         {onSwitch && <button type="button" className={btn} title="예전 방식의 3D 로 바꿔요" onClick={onSwitch}>예전 3D로</button>}
         {full && <button type="button" className={btn} onClick={toggle}>닫기 ✕</button>}
       </div>

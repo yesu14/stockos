@@ -25,7 +25,7 @@ const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
 // 새 3D(WebGL2)를 쓸 수 있는 기기인지 (안 되면 예전 3D 로)
 const glSupported = (() => { try { const c = document.createElement('canvas'), g = c.getContext('webgl2'); const ok = !!g; g?.getExtension('WEBGL_lose_context')?.loseContext(); return ok } catch { return false } })()
-const load3d = () => { try { return localStorage.getItem('wh3d') === 'classic' ? 'classic' : 'gl' } catch { return 'gl' } }
+const load3d = () => { try { const v = localStorage.getItem('wh3d'); return v === 'classic' || v === 'three' ? v : 'gl' } catch { return 'gl' } }
 
 function WarehouseDialog({ wh, onSubmit, onClose }) {
   const [name, setName] = useState(wh.name), [w, setW] = useState(String(wh.width)), [h, setH] = useState(String(wh.height)), [busy, setBusy] = useState(false)
@@ -135,7 +135,7 @@ export default function WarehousePage() {
   const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false), [moveFor, setMoveFor] = useState(null), [view3d, setView3d] = useState(load3d)
   const planRef = useRef(null)
 
-  const switch3d = useCallback(kind => { setView3d(kind); try { localStorage.setItem('wh3d', kind) } catch { /* 저장 안 돼도 괜찮아요 */ } }, [])
+  const switch3d = useCallback((kind, persist = true) => { setView3d(kind); if (persist) { try { localStorage.setItem('wh3d', kind) } catch { /* 저장 안 돼도 괜찮아요 */ } } }, [])
   const load = useCallback(async quiet => {
     try {
       if (!quiet) setStatus('loading')
@@ -216,10 +216,11 @@ export default function WarehousePage() {
           </section>
           <div className="space-y-4 min-w-0">
             <section className={`${card} p-3 sm:p-4`}>
-              {view3d === 'gl' && glSupported
-                ? <Scene3DGL model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
-                    onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })}
-                    onSwitch={() => switch3d('classic')} onFail={() => { switch3d('classic'); toast('이 기기에서는 새 3D가 잘 안 돼서 예전 3D로 바꿨어요', { icon: 'ℹ️' }) }} />
+              {view3d !== 'classic' && glSupported
+                ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
+                    onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
+                    onSwitch={() => switch3d('classic')}
+                    onFail={() => { if (view3d === 'three') { switch3d('gl', false); toast('Three.js 를 불러오지 못해서 기본 3D 로 바꿨어요 (인터넷 연결을 확인해 주세요)', { icon: 'ℹ️' }) } else { switch3d('classic'); toast('이 기기에서는 새 3D가 잘 안 돼서 예전 3D로 바꿨어요', { icon: 'ℹ️' }) } }} />
                 : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                     onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onSwitch={glSupported ? () => switch3d('gl') : undefined} />}
             </section>
