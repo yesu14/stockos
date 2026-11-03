@@ -25,7 +25,12 @@ const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
 // 새 3D(WebGL2)를 쓸 수 있는 기기인지 (안 되면 예전 3D 로)
 const glSupported = (() => { try { const c = document.createElement('canvas'), g = c.getContext('webgl2'); const ok = !!g; g?.getExtension('WEBGL_lose_context')?.loseContext(); return ok } catch { return false } })()
-const load3d = () => { try { const v = localStorage.getItem('wh3d'); return v === 'classic' || v === 'three' ? v : 'gl' } catch { return 'gl' } }
+const WH_VERSION = 'v44'
+// 3D 방식: 주소에 ?3d=gl / three / classic 이 있으면 그걸 우선, 아니면 마지막에 고른 방식(기억해 둔 것)
+const load3d = () => {
+  try { const q = new URLSearchParams(window.location.search).get('3d'); if (q === 'gl' || q === 'three' || q === 'classic') return q } catch { /* 무시 */ }
+  try { const v = localStorage.getItem('wh3d'); return v === 'classic' || v === 'three' ? v : 'gl' } catch { return 'gl' }
+}
 
 function WarehouseDialog({ wh, onSubmit, onClose }) {
   const [name, setName] = useState(wh.name), [w, setW] = useState(String(wh.width)), [h, setH] = useState(String(wh.height)), [busy, setBusy] = useState(false)
@@ -132,10 +137,15 @@ export default function WarehousePage() {
   const highlight = results.ids.size ? results.ids : null
   const [focus, setFocus] = useState(null)
   const [activeZone, setActiveZone] = useState(null)
-  const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false), [moveFor, setMoveFor] = useState(null), [view3d, setView3d] = useState(load3d)
+  const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false), [moveFor, setMoveFor] = useState(null), [view3d, setView3d] = useState(load3d), [fallbackNote, setFallbackNote] = useState('')
   const planRef = useRef(null)
 
-  const switch3d = useCallback((kind, persist = true) => { setView3d(kind); if (persist) { try { localStorage.setItem('wh3d', kind) } catch { /* 저장 안 돼도 괜찮아요 */ } } }, [])
+  const switch3d = useCallback((kind, persist = true) => { setView3d(kind); if (persist) { setFallbackNote(''); try { localStorage.setItem('wh3d', kind) } catch { /* 저장 안 돼도 괜찮아요 */ } } }, [])
+  const failed3d = useCallback(e => {                 // 새 3D / Three.js 가 시작되지 않을 때: 알림 + 이유를 화면에 계속 보여줌 (어떤 기기에서 왜 안 되는지 알 수 있게)
+    const why = String((e && e.message) || '').replace(/\s+/g, ' ').slice(0, 140), tail = why ? ` (이유: ${why})` : ''
+    if (view3d === 'three') { switch3d('gl', false); setFallbackNote(`Three.js 를 불러오지 못해서 기본 3D 로 바꿨어요. 인터넷 연결을 확인하고 "Three.js" 칸을 다시 눌러 보세요.${tail}`); toast('Three.js 를 불러오지 못해서 기본 3D 로 바꿨어요 (인터넷 연결을 확인해 주세요)', { icon: 'ℹ️' }) }
+    else { switch3d('classic'); setFallbackNote(`새 3D 가 이 기기에서 시작되지 않아서 예전 3D 로 바꿨어요.${tail} "기본 3D" 칸을 누르면 다시 시도해요.`); toast('이 기기에서는 새 3D가 잘 안 돼서 예전 3D로 바꿨어요', { icon: 'ℹ️' }) }
+  }, [view3d, switch3d])
   const load = useCallback(async quiet => {
     try {
       if (!quiet) setStatus('loading')
@@ -187,7 +197,7 @@ export default function WarehousePage() {
     <div className="max-w-[1600px] mx-auto space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
         <div className="min-w-0">
-          <h1 className="text-2xl font-black text-white flex items-center gap-2">🧭 상품찾기</h1>
+          <h1 className="text-2xl font-black text-white flex items-center gap-2">🧭 상품찾기 <span className="text-[11px] font-bold text-surface-500 self-end mb-1" title="지금 열려 있는 화면의 버전">{WH_VERSION}</span></h1>
           <p className="text-xs text-surface-400 mt-0.5">창고를 그리고, 박스에 상품을 담고, 어디에 있는지 한 번에 찾아요</p>
         </div>
         <div className="flex-1" />
@@ -216,10 +226,15 @@ export default function WarehousePage() {
           </section>
           <div className="space-y-4 min-w-0">
             <section className={`${card} p-3 sm:p-4`}>
+              {fallbackNote && (
+                <div role="status" data-testid="wh3d-note" className="mb-3 flex items-start gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
+                  <span>⚠️</span><span className="flex-1 min-w-0 break-words">{fallbackNote}</span>
+                  <button type="button" className="shrink-0 px-1 text-amber-300/80 hover:text-amber-200" aria-label="안내 닫기" onClick={() => setFallbackNote('')}>✕</button>
+                </div>)}
               {view3d !== 'classic' && glSupported
                 ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                     onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
-                    onFail={() => { if (view3d === 'three') { switch3d('gl', false); toast('Three.js 를 불러오지 못해서 기본 3D 로 바꿨어요 (인터넷 연결을 확인해 주세요)', { icon: 'ℹ️' }) } else { switch3d('classic'); toast('이 기기에서는 새 3D가 잘 안 돼서 예전 3D로 바꿨어요', { icon: 'ℹ️' }) } }} />
+                    onFail={failed3d} />
                 : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                     onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={glSupported ? switch3d : undefined} />}
             </section>
