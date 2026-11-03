@@ -5,7 +5,6 @@
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Move, SlidersHorizontal } from 'lucide-react'
-import { useFullscreen } from './ui'
 import ViewPicker from './ViewPicker'
 import { hexToRgb, rgbToHex, locationText } from './whLogic'
 import { DARK_PALETTE, LIGHT_PALETTE, SPREAD_DEFAULT, wallHeight, tierGeom } from './render3d'
@@ -37,9 +36,9 @@ function presetCam(kind, model, aspect, spread) {
   return kind === 'front' ? { ...d, yaw: Math.PI / 2, pitch: 0.2 } : { ...d, yaw: 0, pitch: 0.2 }
 }
 
-export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine, onNote }) {
+export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine, onNote, full = false, onToggleFull, onSwitchFull }) {
   const wh = model.warehouse
-  const { ref: frameRef, full, toggle } = useFullscreen()
+  const toggle = () => onToggleFull && onToggleFull()          // 전체화면 틀은 페이지가 가짐 (3D 방식을 바꿔도, 평면도로 바꿔도 전체화면이 풀리지 않게)
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [spread, setSpread] = useState(SPREAD_DEFAULT), [maxTier, setMaxTier] = useState(0), [xray, setXray] = useState(false), [links, setLinks] = useState(true)
@@ -288,12 +287,13 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   const on = '!bg-primary-500 !border-primary-500'
   const chip = a => `px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-all ${a ? 'bg-primary-500 border-primary-500 text-white' : 'bg-surface-800 border-surface-700 text-surface-200 hover:bg-surface-700'}`
   return (
-    <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col gap-2'}>
+    <div className={full ? 'flex flex-col gap-2 flex-1 min-h-0' : 'flex flex-col gap-2'}>
       <div className="flex items-center gap-2 shrink-0 flex-wrap">
         <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고</h2>
         <div className="flex-1" />
         {wh && <button type="button" className={`${btn} ${panel ? on : ''}`} style={panel ? { color: '#fff' } : undefined} aria-pressed={panel} onClick={() => setPanel(v => !v)}><span className="inline-flex items-center gap-1"><SlidersHorizontal size={13} /> 보기 설정</span></button>}
         {onEngine && <ViewPicker value={engine === 'three' ? 'three' : 'gl'} onChange={onEngine} />}
+        {full && onSwitchFull && <button type="button" className={btn} onClick={onSwitchFull} title="평면도 전체화면으로 바꾸기">🗺️ 평면도 전체화면</button>}
         {full && <button type="button" className={btn} onClick={toggle}>닫기 ✕</button>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown}

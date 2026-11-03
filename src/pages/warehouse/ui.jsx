@@ -135,6 +135,37 @@ export function useFullscreen() {
   return { ref, full, toggle: () => (full ? exit() : enter()), exit }
 }
 
+/** 평면도 / 3D 전체화면을 페이지에서 한꺼번에 관리.
+ *  브라우저 전체화면은 페이지 전체(html)에 한 번만 걸고, 평면도 ↔ 3D 는 그 안에서 화면 덮개(스타일)만 바꿈.
+ *  그래서 3D 방식을 바꾸거나(기본 3D · Three.js · 예전 3D) 평면도 ↔ 3D 로 바꿔도 전체화면이 풀리거나 깜빡이지 않고, 전체화면이 겹겹이 쌓이지도 않음.
+ *  페이지 전체가 전체화면 요소라서 팝업 창·알림 메시지(토스트)도 전체화면에서 그대로 보임.
+ *  cur = null | 'plan' | 'v3d' (어느 화면이 전체화면인지). 브라우저 전체화면이 안 되는 곳에서는 덮개만으로 화면 전체를 덮음 */
+export function useFullscreenViews() {
+  const [cur, setCur] = useState(null)
+  const exit = useCallback(() => {
+    setCur(null)
+    try { if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {}) } catch { /* 무시 */ }
+  }, [])
+  const enter = useCallback(which => {
+    setCur(which)
+    try { if (!document.fullscreenElement) { const p = document.documentElement.requestFullscreen?.(); p?.catch?.(() => {}) } } catch { /* 무시 */ }
+  }, [])
+  const curRef = useRef(null); curRef.current = cur
+  useEffect(() => {
+    const h = () => { if (!document.fullscreenElement) setCur(null) }                   // 브라우저가 전체화면을 끝냈을 때 (Esc 등)
+    document.addEventListener('fullscreenchange', h)
+    return () => document.removeEventListener('fullscreenchange', h)
+  }, [])
+  useEffect(() => {
+    if (!cur) return
+    const k = e => { if (e.key === 'Escape' && modalStack.length === 0) exit() }       // 창이 열려 있으면 창이 먼저 닫힘
+    window.addEventListener('keydown', k)
+    const unlock = lockScroll()
+    return () => { window.removeEventListener('keydown', k); unlock() }
+  }, [cur, exit])
+  return { cur, enter, exit, toggle: which => (curRef.current === which ? exit() : enter(which)) }
+}
+
 export function Stepper({ value, onChange, min = 0, max = 99, label, size = 'md' }) {
   const set = v => onChange(Math.max(min, Math.min(max, Math.round(Number(v) || 0))))
   const b = size === 'sm' ? 'w-8 h-8' : 'w-9 h-9'

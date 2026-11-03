@@ -3,7 +3,7 @@
 //  직교 투영 + 화가 알고리즘(먼 것부터 그리기). 캔버스로 그리고, 같은 장면을 SVG 로도 뽑을 수 있음(테스트용).
 //  좌표: x → 오른쪽, y → 아래(평면도와 동일), z → 위
 // ═══════════════════════════════════════════════════════════
-import { TXT, FACES as FT_FACES, faceLayout, labelChars, GLYPH_FONT } from './faceText'
+import { TXT, FACES as FT_FACES, faceLayout, labelChars, glyphMaxW, GLYPH_FONT } from './faceText'
 import { shade as shadeRaw, rgba as rgbaRaw, fixtureLen, clamp, officeRect } from './whLogic'
 
 const _c = new Map()
@@ -407,11 +407,12 @@ export function drawScene(ctx, scene, vp, opts = {}) {
       if (it.casing) { ctx.strokeStyle = it.casing; ctx.lineWidth = it.lw + 2.4; ctx.stroke() }          // 점선 바깥 테두리 (밝은 면 위에서도 보이게)
       ctx.strokeStyle = it.stroke; ctx.lineWidth = it.lw; ctx.stroke(); if (it.dash) ctx.setLineDash([])
     } else if (it.k === 'ftext') {                  // 면 위의 번호: 면의 기울기대로 기울여 그림 (흰 테두리 → 글자 순서)
-      const CH = TXT.CH, adv = TXT.CA * CH, base = (TXT.BASE - 0.5) * CH, lim = TXT.CW * TXT.SQ - CH * 0.1, ink = `rgb(${TXT.INK.join(',')})`
-      ctx.save(); ctx.transform(it.m[0], it.m[1], it.m[2], it.m[3], it.m[4], it.m[5]); ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.font = `900 ${Math.round(CH * 0.66)}px ${GLYPH_FONT}`
+      const CH = TXT.CH, adv = TXT.CA * CH, base = (TXT.BASE - 0.5) * CH, lim = glyphMaxW(), ink = `rgba(${TXT.INK.join(',')},${TXT.INK_A})`, halo = `rgba(${TXT.HALO.join(',')},${TXT.HALO_A})`
+      ctx.save(); ctx.transform(it.m[0], it.m[1], it.m[2], it.m[3], it.m[4], it.m[5]); ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.font = `${TXT.WEIGHT} ${Math.round(CH * 0.66)}px ${GLYPH_FONT}`
       it.cs.forEach((ch, i) => {
         const w = ctx.measureText(ch).width; ctx.save(); ctx.translate((i - (it.cs.length - 1) / 2) * adv, base); ctx.scale(w > lim ? lim / w : 1, 1)
-        ctx.lineWidth = CH * 0.105; ctx.strokeStyle = '#ffffff'; ctx.strokeText(ch, 0, 0); ctx.fillStyle = ink; ctx.fillText(ch, 0, 0); ctx.lineWidth = CH * 0.03; ctx.strokeStyle = ink; ctx.strokeText(ch, 0, 0); ctx.restore()
+        if (TXT.HALO_A > 0) { ctx.lineWidth = CH * TXT.HALO_W; ctx.strokeStyle = halo; ctx.strokeText(ch, 0, 0) }
+        ctx.fillStyle = ink; ctx.fillText(ch, 0, 0); ctx.restore()
       })
       ctx.restore()
     } else if (it.k === 'dot') {
@@ -446,7 +447,7 @@ export function sceneToSvg(scene, vp, bg) {
       const p = []; for (let i = 0; i < it.pts.length; i += 2) p.push(`${it.pts[i].toFixed(1)},${it.pts[i + 1].toFixed(1)}`)
       o.push(`<polygon points="${p.join(' ')}" fill="${it.fill}"${it.stroke && it.lw ? ` stroke="${it.stroke}" stroke-width="${it.lw}" stroke-linejoin="round"` : ''}${a}/>`)
     } else if (it.k === 'line') o.push(`<line x1="${it.pts[0]}" y1="${it.pts[1]}" x2="${it.pts[2]}" y2="${it.pts[3]}" stroke="${it.stroke}" stroke-width="${it.lw}"${it.dash ? ` stroke-dasharray="${it.dash.join(' ')}"` : ''}${a}/>`)
-    else if (it.k === 'ftext') { const CH = TXT.CH, adv = TXT.CA * CH; o.push(`<g transform="matrix(${it.m.join(' ')})"${a}>${it.cs.map((ch, i) => `<text x="${((i - (it.cs.length - 1) / 2) * adv).toFixed(2)}" y="${((TXT.BASE - 0.5) * CH).toFixed(2)}" font-size="${Math.round(CH * 0.66)}" font-weight="900" text-anchor="middle" font-family="sans-serif" stroke="#fff" stroke-width="${(CH * 0.105).toFixed(1)}" fill="rgb(${TXT.INK.join(',')})" paint-order="stroke">${esc(ch)}</text>`).join('')}</g>`) }
+    else if (it.k === 'ftext') { const CH = TXT.CH, adv = TXT.CA * CH; o.push(`<g transform="matrix(${it.m.join(' ')})"${a}>${it.cs.map((ch, i) => `<text x="${((i - (it.cs.length - 1) / 2) * adv).toFixed(2)}" y="${((TXT.BASE - 0.5) * CH).toFixed(2)}" font-size="${Math.round(CH * 0.66)}" font-weight="${TXT.WEIGHT}" text-anchor="middle" font-family="sans-serif" stroke="rgba(${TXT.HALO.join(',')},${TXT.HALO_A})" stroke-width="${(CH * TXT.HALO_W).toFixed(1)}" fill="rgba(${TXT.INK.join(',')},${TXT.INK_A})" paint-order="stroke">${esc(ch)}</text>`).join('')}</g>`) }
     else if (it.k === 'dot') o.push(`<circle cx="${it.x}" cy="${it.y}" r="${it.r}" fill="${it.fill}"/>`)
     else if (it.k === 'text') o.push(`<text x="${it.x}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif"${a}>${esc(it.text)}</text>`)
     else if (it.k === 'tag') o.push(`${it.lead ? `<line x1="${it.lead[0]}" y1="${it.lead[1]}" x2="${it.x}" y2="${it.y}" stroke="rgba(255,255,255,0.55)" stroke-width="1.2"/>` : ''}<rect x="${it.x - it.w / 2}" y="${it.y - it.h / 2}" width="${it.w}" height="${it.h}" rx="${it.h / 2}" fill="${it.fill}" stroke="${it.hl ? '#f59e0b' : 'rgba(0,0,0,0.28)'}"${a}/><text x="${it.x}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif"${a}>${esc(it.text)}</text>`)

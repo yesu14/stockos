@@ -10,7 +10,7 @@ import SkuThumb from '../../components/ui/SkuThumb'
 import api from './whApi'
 import { makeActions } from './whActions'
 import { buildModel, emptyRaw, rawReducer, searchAll, locationText, LIMITS, stackRepairs, round2 } from './whLogic'
-import { Btn, Modal, Field, inputCls, useAsk, usePrompt, EmptyNote, StockBadge } from './ui'
+import { Btn, Modal, Field, inputCls, useAsk, usePrompt, EmptyNote, StockBadge, useFullscreenViews } from './ui'
 import FloorPlan from './FloorPlan'
 import Scene3D from './Scene3D'
 import Scene3DGL from './Scene3DGL'
@@ -25,7 +25,8 @@ const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
 // 새 3D(WebGL2)를 쓸 수 있는 기기인지 (안 되면 예전 3D 로)
 const glSupported = (() => { try { const c = document.createElement('canvas'), g = c.getContext('webgl2'); const ok = !!g; g?.getExtension('WEBGL_lose_context')?.loseContext(); return ok } catch { return false } })()
-const WH_VERSION = 'v47'
+const WH_VERSION = 'v48'
+const FS_FRAME = 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950'      // 전체화면일 때 틀 (평면도 / 3D 공통)
 // 3D 방식: 주소에 ?3d=gl / three / classic 이 있으면 그걸 우선, 아니면 마지막에 고른 방식(기억해 둔 것)
 const load3d = () => {
   try { const q = new URLSearchParams(window.location.search).get('3d'); if (q === 'gl' || q === 'three' || q === 'classic') return q } catch { /* 무시 */ }
@@ -139,6 +140,7 @@ export default function WarehousePage() {
   const [activeZone, setActiveZone] = useState(null)
   const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false), [moveFor, setMoveFor] = useState(null), [view3d, setView3d] = useState(load3d), [fallbackNote, setFallbackNote] = useState('')
   const planRef = useRef(null)
+  const fsv = useFullscreenViews()                       // 평면도 / 3D 전체화면 (서로 바꿀 수 있고, 3D 방식을 바꿔도 풀리지 않음)
 
   const switch3d = useCallback((kind, persist = true) => { setView3d(kind); if (persist) { setFallbackNote(''); try { localStorage.setItem('wh3d', kind) } catch { /* 저장 안 돼도 괜찮아요 */ } } }, [])
   const failed3d = useCallback(e => {                 // 새 3D / Three.js 가 시작되지 않을 때: 알림 + 이유를 화면에 계속 보여줌 (어떤 기기에서 왜 안 되는지 알 수 있게)
@@ -222,21 +224,27 @@ export default function WarehousePage() {
       {status === 'ready' && (
         <div className="grid xl:grid-cols-[minmax(0,1fr)_440px] gap-4 items-start">
           <section ref={planRef} className={`${card} p-3 sm:p-4 h-[78vh] min-h-[520px]`}>
-            <FloorPlan model={model} canEdit={canEdit} highlight={highlight} focus={focus} onSelectZone={setActiveZone} onNotify={m => toast(m)} actions={planActions} />
+            <div data-testid="fs-plan" className={fsv.cur === 'plan' ? FS_FRAME : 'h-full'}>
+              <FloorPlan model={model} canEdit={canEdit} highlight={highlight} focus={focus} onSelectZone={setActiveZone} onNotify={m => toast(m)} actions={planActions}
+                full={fsv.cur === 'plan'} onToggleFull={() => fsv.toggle('plan')} onSwitchFull={() => fsv.enter('v3d')} />
+            </div>
           </section>
           <div className="space-y-4 min-w-0">
             <section className={`${card} p-3 sm:p-4`}>
-              {fallbackNote && (
-                <div role="status" data-testid="wh3d-note" className="mb-3 flex items-start gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
-                  <span>⚠️</span><span className="flex-1 min-w-0 break-words">{fallbackNote}</span>
-                  <button type="button" className="shrink-0 px-1 text-amber-300/80 hover:text-amber-200" aria-label="안내 닫기" onClick={() => setFallbackNote('')}>✕</button>
-                </div>)}
-              {view3d !== 'classic' && glSupported
-                ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} onNote={setFallbackNote} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
-                    onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
-                    onFail={failed3d} />
-                : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
-                    onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={glSupported ? switch3d : undefined} />}
+              <div data-testid="fs-3d" className={fsv.cur === 'v3d' ? FS_FRAME : ''}>
+                {fallbackNote && (
+                  <div role="status" data-testid="wh3d-note" className="mb-3 flex items-start gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
+                    <span>⚠️</span><span className="flex-1 min-w-0 break-words">{fallbackNote}</span>
+                    <button type="button" className="shrink-0 px-1 text-amber-300/80 hover:text-amber-200" aria-label="안내 닫기" onClick={() => setFallbackNote('')}>✕</button>
+                  </div>)}
+                {view3d !== 'classic' && glSupported
+                  ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} onNote={setFallbackNote} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
+                      onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
+                      onFail={failed3d} full={fsv.cur === 'v3d'} onToggleFull={() => fsv.toggle('v3d')} onSwitchFull={() => fsv.enter('plan')} />
+                  : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
+                      onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={glSupported ? switch3d : undefined}
+                      full={fsv.cur === 'v3d'} onToggleFull={() => fsv.toggle('v3d')} onSwitchFull={() => fsv.enter('plan')} />}
+              </div>
             </section>
             <section className={card}>
               <SearchPanel model={model} query={query} setQuery={setQuery} results={results} onLocate={locate} onOpen={setBoxId} />

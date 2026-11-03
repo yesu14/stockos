@@ -135,8 +135,8 @@ void main() {
   if (vState > 1.5) { col = mix(col, vec3(1.0, 0.31, 0.58), 0.38 + 0.2 * pulse); }
   if (abs(vIdx - uHover) < 0.5) col = mix(col, vec3(1.0), 0.3);
   vec2 tm = faceText(normalize(vN));
-  col = mix(col, vec3(1.0), tm.y * 0.92);                 // 흰 테두리 → 글자 순서로 칠함
-  col = mix(col, vec3(0.07, 0.10, 0.17), tm.x);
+  col = mix(col, vec3(1.0), tm.y * ${F3(TXT.HALO_A)});     // 얇은 흰 테두리 → 글자 순서로 칠함
+  col = mix(col, vec3(${TXT.INK.map(v => F3(v / 255)).join(', ')}), tm.x * ${F3(TXT.INK_A)});
   if (a < 0.999 && a > 0.2) a = max(a, max(tm.x, tm.y * 0.9) * 0.9);        // 반투명(속 보기)일 때도 번호는 또렷하게
   if (a < 0.999) a = max(a, line * 0.6);
   o = vec4(col, a);

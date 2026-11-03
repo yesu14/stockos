@@ -5,7 +5,7 @@
 import ViewPicker from './ViewPicker'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Crosshair, Layers, Move, SlidersHorizontal } from 'lucide-react'
-import { Btn, useFullscreen } from './ui'
+import { Btn } from './ui'
 import { rgbToHex, clamp } from './whLogic'
 import {
   buildScene, drawScene, hitTest, defaultCamera, zoomCamera, rotateCamera, focusCamera, panGround,
@@ -28,9 +28,9 @@ function lerpCam(a, b, e) {
 }
 const TWO_PI = Math.PI * 2
 
-export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onEngine }) {
+export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onEngine, full = false, onToggleFull, onSwitchFull }) {
   const wh = model.warehouse
-  const { ref: frameRef, full, toggle } = useFullscreen()
+  const toggle = () => onToggleFull && onToggleFull()          // 전체화면 틀은 페이지가 가짐
   const boxRef = useRef(null), canvasRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })        // 실제로 측정되기 전에는 맞추지 않음
   const [topView, setTopView] = useState(false)
@@ -194,11 +194,12 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
   const ctl = 'w-9 h-9 rounded-2xl bg-surface-900/95 border border-surface-700 text-surface-200 flex items-center justify-center shadow-lg backdrop-blur hover:bg-surface-800 active:scale-90 transition-all'
 
   return (
-    <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col gap-2'}>
-      <div className="flex items-center gap-2 shrink-0">
+    <div className={full ? 'flex flex-col gap-2 flex-1 min-h-0' : 'flex flex-col gap-2'}>
+      <div className="flex items-center gap-2 shrink-0 flex-wrap">
         <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고 <span className="text-[10px] font-normal text-surface-400">(예전 방식)</span></h2>
         <div className="flex-1" />
         {onEngine ? <ViewPicker value="classic" onChange={onEngine} /> : <span className="text-[10px] text-surface-500">이 기기에서는 새 3D 를 쓸 수 없어요</span>}
+        {full && onSwitchFull && <Btn size="sm" variant="soft" onClick={onSwitchFull} title="평면도 전체화면으로 바꾸기">🗺️ 평면도 전체화면</Btn>}
         {full && <Btn size="sm" variant="soft" onClick={toggle}>닫기 ✕</Btn>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown} className={`relative rounded-[28px] overflow-hidden border border-surface-700 touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 ${full ? 'flex-1 min-h-0' : 'h-[300px] sm:h-[340px]'}`}

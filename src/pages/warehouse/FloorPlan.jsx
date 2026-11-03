@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useCallback, memo } from 'react'
 import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Trash2, Settings, Package, Crosshair } from 'lucide-react'
-import { Btn, FixtureIcon, useFullscreen } from './ui'
+import { Btn, FixtureIcon } from './ui'
 import {
   SNAP, MIN_ZONE, LIMITS, REASON_TEXT, FIXTURE_LABEL, checkZoneRect, checkOfficeSpot, snapToWall, fixtureAnchor, fixtureLen,
   shade, rgba, clamp, round2, snap, OFFICE_W, OFFICE_H, planBoxMove,
@@ -178,9 +178,9 @@ const hitOf = el => {
   return i < 0 ? { kind: s, id: null } : { kind: s.slice(0, i), id: s.slice(i + 1) }
 }
 
-export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZone, onNotify, actions }) {
+export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZone, onNotify, actions, full = false, onToggleFull, onSwitchFull }) {
   const wh = model.warehouse
-  const { ref: frameRef, full, toggle } = useFullscreen()
+  const toggle = () => onToggleFull && onToggleFull()          // 전체화면 틀은 페이지가 가짐 (3D 전체화면과 서로 바꿀 수 있게)
   const boxRef = useRef(null), svgRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })        // 실제로 측정되기 전에는 맞추지 않음 (기본값으로 맞추면 폰에서 잘려 보임)
   const [view, setViewState] = useState({ cx: 20, cy: 13, zoom: 14, rot: 0 })
@@ -443,7 +443,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
   ].filter(t => t[3])
 
   return (
-    <div ref={frameRef} className={full ? 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950' : 'flex flex-col h-full gap-2'}>
+    <div className={full ? 'flex flex-col flex-1 min-h-0 gap-2' : 'flex flex-col h-full gap-2'}>
       <div className="flex items-center gap-2 flex-wrap shrink-0">
         <div className="flex items-center gap-2 mr-1"><span className="text-lg">🗺️</span><h2 className="font-bold text-white text-sm">평면도</h2></div>
         {canEdit && tools.map(([k, label, icon]) => (
@@ -459,6 +459,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
             <Maximize2 size={15} />창고 크기
           </button>)}
         <div className="flex-1" />
+        {full && onSwitchFull && <Btn size="sm" variant="soft" onClick={onSwitchFull} title="3D 전체화면으로 바꾸기">🧊 3D 전체화면</Btn>}
         {full && <Btn size="sm" variant="soft" onClick={toggle}>닫기 ✕</Btn>}
       </div>
 
