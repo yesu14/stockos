@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 //  상품찾기 — 새 3D 창고 뷰어 (WebGL, 원근 카메라)
 //  왼쪽 끌기=돌리기 · 오른쪽 끌기(또는 Shift+끌기, ✋ 이동 모드)=바닥을 잡고 이동 · 휠=커서 위치로 확대 · 방향키/WASD=이동
-//  마우스를 올리면 그 박스 번호가 나오고, 누르면 박스 창이 열려요. 단면/층/간격/반투명으로 안쪽 박스도 볼 수 있어요.
+//  마우스를 올리면 그 박스 번호가 나오고, 누르면 박스 창이 열려요. 단면/층/간격/반투명으로 안쪽 박스도 볼 수 있고, 쌓인 박스는 점선으로 이어서 보여요.
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Minus, RotateCcw, RotateCw, Maximize2, Minimize2, Move, SlidersHorizontal } from 'lucide-react'
@@ -42,7 +42,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   const { ref: frameRef, full, toggle } = useFullscreen()
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
-  const [spread, setSpread] = useState(SPREAD_DEFAULT), [maxTier, setMaxTier] = useState(0), [xray, setXray] = useState(false)
+  const [spread, setSpread] = useState(SPREAD_DEFAULT), [maxTier, setMaxTier] = useState(0), [xray, setXray] = useState(false), [links, setLinks] = useState(true)
   const [sec, setSec] = useState(0), [numMode, setNumMode] = useState(engine === 'three' ? 'all' : 'auto'), [panMode, setPanMode] = useState(false), [panel, setPanel] = useState(false)
   const [lowDetail, setLowDetail] = useState(false), [error, setError] = useState(''), [themeKey, setThemeKey] = useState(0), [ready, setReady] = useState(0)
   const framing = useRef('home')                       // 처음/위에서/앞에서/옆에서 중 지금 보는 방식 (직접 움직이면 null → 화면 크기가 바뀌어도 그대로 둠)
@@ -51,7 +51,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   const theme = useMemo(() => readTheme(), [themeKey])
   const tiersList = useMemo(() => Array.from({ length: Math.max(1, ...model.boxes.map(b => b.tier)) }, (_, i) => i + 1), [model.boxes])
   const tapRef = useRef(null)                           // 방금 한 탭(누르고 뗌): 창은 클릭 이벤트 때 열어서, 폰의 '고스트 클릭'이 새 창을 닫지 않게
-  const L = useRef({}); L.current = { model, highlight, focus, size, theme, spread, maxTier, xray, sec, numMode, panMode }
+  const L = useRef({}); L.current = { model, highlight, focus, size, theme, spread, maxTier, xray, sec, numMode, panMode, links }
   const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1
   useEffect(() => { if (maxTier > tiersList.length) setMaxTier(0) }, [tiersList.length]) // eslint-disable-line
 
@@ -261,7 +261,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
       }
       const low = !moving && Lc.numMode !== 'off' && vis.current.length > 0 && shown.length === 0 && tagsShown.length === 0 && faces.length === 0 && maxPx < (ft ? FACE_MIN_AREA : NUM_MIN_AREA)
       if (low !== lowRef.current) { lowRef.current = low; setLowDetail(low) }
-      ov.dataset.labels = shown.join(','); ov.dataset.tags = tagsShown.join(','); ov.dataset.faces = faces.join(','); ov.dataset.visible = String(vis.current.length); ov.dataset.hover = hv.index >= 0 && meta[hv.index] ? meta[hv.index].number : ''
+      ov.dataset.labels = shown.join(','); ov.dataset.tags = tagsShown.join(','); ov.dataset.faces = faces.join(','); ov.dataset.links = String(Lc.links ? (r.linkCount || 0) : 0); ov.dataset.visible = String(vis.current.length); ov.dataset.hover = hv.index >= 0 && meta[hv.index] ? meta[hv.index].number : ''
     }
     const loop = t => {
       raf = requestAnimationFrame(loop)
@@ -273,13 +273,13 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
       if (!dirty.current && !visDirty.current && !(pulsing && t - lastDraw.current > 66)) return
       lastDraw.current = t; dirty.current = false
       const aspect = Lc.size.w / Lc.size.h, sec = secObj(), moving = performance.now() < moveUntil.current || !!gesture.current
-      r.draw({ cam: cam.current, aspect, time: t / 1000, bg: Lc.theme.bg, hover: hover.current.index, sec, showText: Lc.numMode !== 'off', gridColor: Lc.theme.light ? [0.1, 0.14, 0.25] : [1, 1, 1], gridAlpha: Lc.theme.light ? 0.14 : 0.16 })
+      r.draw({ cam: cam.current, aspect, time: t / 1000, bg: Lc.theme.bg, hover: hover.current.index, sec, showText: Lc.numMode !== 'off', showLinks: Lc.links, gridColor: Lc.theme.light ? [0.1, 0.14, 0.25] : [1, 1, 1], gridAlpha: Lc.theme.light ? 0.14 : 0.16 })
       if (visDirty.current && !moving) { vis.current = r.visibility(cam.current, aspect, sec, ghostPick()); visDirty.current = false }
       overlay(t, moving)
     }
     raf = requestAnimationFrame(loop); return () => cancelAnimationFrame(raf)
   }, [dpr]) // eslint-disable-line
-  useEffect(() => { dirty.current = visDirty.current = true }, [sec, numMode, panMode, theme])
+  useEffect(() => { dirty.current = visDirty.current = true }, [sec, numMode, panMode, theme, links])
 
   const btn = 'h-8 px-2.5 rounded-xl bg-surface-900/95 border border-surface-700 text-surface-200 text-[11px] font-bold shadow-lg backdrop-blur hover:bg-surface-800 active:scale-95 transition-all'
   const sq = 'w-9 h-9 rounded-2xl bg-surface-900/95 border border-surface-700 text-surface-200 flex items-center justify-center shadow-lg backdrop-blur hover:bg-surface-800 active:scale-90 transition-all'
@@ -348,6 +348,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
             <div className="flex flex-wrap gap-1">{[['auto', '박스 면에만'], ['all', '가려진 박스도'], ['off', '끄기']].map(([k, label]) => <button key={k} type="button" onClick={() => setNumMode(k)} className={chip(numMode === k)}>{label}</button>)}</div>
           </div>
           <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={xray} onChange={e => setXray(e.target.checked)} /> 반투명으로 보기 <span className="text-surface-500">(모든 박스가 비쳐 보여요)</span></label>
+          {engine !== 'three' && <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={links} onChange={e => setLinks(e.target.checked)} /> 층 연결 점선 <span className="text-surface-500">(위층 박스를 바로 아래 박스와 점선으로 이어 보여요)</span></label>}
           <p className="text-[10px] text-surface-500 leading-relaxed">3D 화면을 한 번 누른 뒤: 방향키 / W A S D = 이동 · Q E = 돌리기 · + − = 확대 (Shift 를 같이 누르면 크게)</p>
         </div>)}
     </div>

@@ -20,6 +20,34 @@ function buildAtlas(chars) {
   })
   return { cv, rows }
 }
+// ── 층 연결 점선 ─────────────────────────────────────────────
+const LINE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aQ;
+layout(location=1) in vec3 iP0; layout(location=2) in vec3 iP1; layout(location=3) in float iA;
+uniform mat4 uVP; uniform vec2 uView; uniform float uPx; uniform vec3 uEye; uniform vec3 uFwd; uniform float uSecOn; uniform float uSecDist;
+out float vA; out vec3 vWorld; flat out vec2 vS0; flat out vec2 vDir;
+void main() {
+  vec4 c0 = uVP * vec4(iP0, 1.0), c1 = uVP * vec4(iP1, 1.0);
+  bool hidden = (uSecOn > 0.5 && dot((iP0 + iP1) * 0.5 - uEye, uFwd) < uSecDist) || c0.w < 0.05 || c1.w < 0.05;   // 단면으로 잘렸거나 카메라 뒤로 넘어가는 선은 그리지 않음
+  if (hidden) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec2 s0 = (c0.xy / c0.w * 0.5 + 0.5) * uView, s1 = (c1.xy / c1.w * 0.5 + 0.5) * uView;
+  vec2 d = s1 - s0; float len = length(d); vec2 dir = len > 1e-3 ? d / len : vec2(0.0, 1.0);
+  vec4 c = aQ.x < 0.5 ? c0 : c1; vec2 sc = aQ.x < 0.5 ? s0 : s1;
+  vec2 sp = sc + vec2(-dir.y, dir.x) * aQ.y * uPx * 0.5;
+  gl_Position = vec4((sp / uView * 2.0 - 1.0) * c.w, c.z, c.w);
+  vWorld = aQ.x < 0.5 ? iP0 : iP1; vA = iA; vS0 = s0; vDir = dir;
+}`
+const LINE_FS = `#version 300 es
+precision highp float;
+in float vA; in vec3 vWorld; flat in vec2 vS0; flat in vec2 vDir;
+uniform vec3 uColor; uniform float uDash;
+out vec4 o;
+void main() {
+  float s = dot(gl_FragCoord.xy - vS0, vDir);
+  if (mod(s, uDash * 2.0) > uDash) discard;           // 점선: 켜짐/꺼짐을 같은 길이로 반복
+  o = vec4(uColor, vA);
+}`
 const LIGHT = (() => { const v = [-0.4, -0.5, 0.77], l = Math.hypot(...v); return v.map(x => x / l) })()
 const rgbf = hex => hexToRgb(hex).map(v => v / 255)
 
@@ -189,22 +217,24 @@ export function buildEnv(model, spread, pal, activeZoneId) {
 
 // ── 박스 (인스턴스) ──────────────────────────────────────────
 export const INST_FLOATS = 11
+export const LINK_FLOATS = 7            // 층 연결 점선 하나의 데이터: 시작 xyz, 끝 xyz, 진하기
 export function buildInstances(model, o = {}) {
   const spread = o.spread ?? SPREAD_DEFAULT, maxTier = o.maxTier || 0, hl = o.highlight && o.highlight.size ? o.highlight : null
-  const solid = [], ghost = []
+  const solid = [], ghost = [], pairs = []        // pairs: 같은 칸에서 바로 위아래로 쌓인 박스 쌍 (점선으로 이어줄 것)
   for (const z of model.zones) {
     const G = tierGeom(z, spread), mx = z.cw * G.mf, my = z.ch * G.mf, rgb = rgbf(z.color)
     z.lines.forEach((ln, li) => {
-      for (const [s, all] of ln.stacks) for (const b of all) {
+      for (const [s, all] of ln.stacks) { let prev = null; for (const b of all) {
         if (maxTier && b.tier > maxTier) continue
         const x0 = z.x + (s - 1) * z.cw + mx, x1 = z.x + s * z.cw - mx, y0 = z.y + li * z.ch + my, y1 = z.y + (li + 1) * z.ch - my
         const z0 = (b.tier - 1) * G.pz, z1 = z0 + G.boxH
         const isHl = !!(hl && hl.has(b.id)), isFocus = o.focusId === b.id
         const isGhost = !isHl && !isFocus && !!(hl || o.xray)
         const k = b.tier % 2 ? 1 : 0.92
-        ;(isGhost ? ghost : solid).push({ id: b.id, number: b.box_number, box: b, zoneId: z.id, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, cz: (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0,
-          rgb: [rgb[0] * k, rgb[1] * k, rgb[2] * k], a: isGhost ? (hl ? 0.13 : 0.3) : 1, state: isFocus ? 2 : isHl ? 1 : 0, ghost: isGhost, pitch: Math.min(z.cw, z.ch) })
-      }
+        const mm = { id: b.id, number: b.box_number, box: b, zoneId: z.id, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, cz: (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0,
+          rgb: [rgb[0] * k, rgb[1] * k, rgb[2] * k], a: isGhost ? (hl ? 0.13 : 0.3) : 1, state: isFocus ? 2 : isHl ? 1 : 0, ghost: isGhost, pitch: Math.min(z.cw, z.ch) }
+        ;(isGhost ? ghost : solid).push(mm); if (prev) pairs.push([prev, mm]); prev = mm
+      } }
     })
   }
   const meta = solid.concat(ghost), f = new Float32Array(meta.length * INST_FLOATS)
@@ -213,7 +243,16 @@ export function buildInstances(model, o = {}) {
     f.set([m.cx, m.cy, m.cz, m.sx, m.sy, m.sz, m.rgb[0], m.rgb[1], m.rgb[2], m.a, m.state], i * INST_FLOATS)
     lo = [Math.min(lo[0], m.cx - m.sx / 2), Math.min(lo[1], m.cy - m.sy / 2), Math.min(lo[2], m.cz - m.sz / 2)]; hi = [Math.max(hi[0], m.cx + m.sx / 2), Math.max(hi[1], m.cy + m.sy / 2), Math.max(hi[2], m.cz + m.sz / 2)]
   })
-  return { f32: f, meta, nSolid: solid.length, nGhost: ghost.length, bbox: meta.length ? { min: lo, max: hi } : null, indexById: new Map(meta.map((m, i) => [m.id, i])) }
+  // 층 연결 점선: 위층 박스의 아래면 ↔ 바로 아래 박스의 윗면 사이 빈 공간을 세로선으로 이음 (간격이 거의 없으면 생략, 둘 다 흐린 박스면 생략)
+  const segs = [], corners = o.linkMode === 'corners'
+  for (const [lo, up] of pairs) {
+    const zl = lo.cz + lo.sz / 2, zu = up.cz - up.sz / 2, la = Math.max(lo.a, up.a)
+    if (zu - zl < up.pitch * 0.06 || la < 0.2) continue
+    const al = 0.35 + 0.55 * la
+    if (corners) for (const [fx, fy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) segs.push(up.cx + fx * up.sx / 2, up.cy + fy * up.sy / 2, zl, up.cx + fx * up.sx / 2, up.cy + fy * up.sy / 2, zu, al)
+    else segs.push(up.cx, up.cy, zl, up.cx, up.cy, zu, al)
+  }
+  return { f32: f, meta, links: new Float32Array(segs), nLinks: segs.length / LINK_FLOATS, nSolid: solid.length, nGhost: ghost.length, bbox: meta.length ? { min: lo, max: hi } : null, indexById: new Map(meta.map((m, i) => [m.id, i])) }
 }
 
 // ── 그리기 엔진 ────────────────────────────────────────────
@@ -222,6 +261,7 @@ export function createRenderer(canvas) {
   if (!gl) throw new Error('이 기기에서는 3D(WebGL2)를 쓸 수 없어요')
   const envP = program(gl, ENV_VS, ENV_FS, ['uVP', 'uLight', 'uGrid', 'uGridColor', 'uGridAlpha'])
   const boxP = program(gl, BOX_VS, BOX_FS, ['uVP', 'uEye', 'uFwd', 'uSecOn', 'uSecDist', 'uIdBase', 'uLight', 'uPass', 'uTime', 'uHover', 'uGlyph', 'uGlyphGrid', 'uShowText'])
+  const lineP = program(gl, LINE_VS, LINE_FS, ['uVP', 'uView', 'uPx', 'uEye', 'uFwd', 'uSecOn', 'uSecDist', 'uColor', 'uDash'])
   // 단위 상자: 면마다 4 꼭짓점 (위치, 법선, uv)
   const cubeV = [], cubeI = []
   for (const [n, u, v] of [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [0, 0, 1], [1, 0, 0]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [0, 1, 0], [1, 0, 0]]]) {
@@ -245,7 +285,7 @@ export function createRenderer(canvas) {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 40, 12); gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 40, 24)
     gl.bindVertexArray(null); return { vao, buf, count: data.length / 10 }
   }
-  const S = { env: null, inst: null, vaoSolid: null, vaoGhost: null, fboS: null, fboF: null, buf: null, glyph: null }
+  const S = { env: null, inst: null, vaoSolid: null, vaoGhost: null, fboS: null, fboF: null, buf: null, glyph: null, nLinks: 0 }
   const freeEnv = () => { if (S.env) for (const g of ['floor', 'solid', 'trans']) { gl.deleteVertexArray(S.env[g].vao); gl.deleteBuffer(S.env[g].buf) } }
   const makeFbo = (w, h) => {
     const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
@@ -290,10 +330,18 @@ export function createRenderer(canvas) {
     gl.bindBuffer(gl.ARRAY_BUFFER, instB); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW)
     if (S.vaoSolid) { gl.deleteVertexArray(S.vaoSolid); gl.deleteVertexArray(S.vaoGhost) }
     S.vaoSolid = boxVao(0); S.vaoGhost = boxVao(inst.nSolid)
+    gl.bindBuffer(gl.ARRAY_BUFFER, linkB); gl.bufferData(gl.ARRAY_BUFFER, inst.links.length ? inst.links : new Float32Array(LINK_FLOATS), gl.DYNAMIC_DRAW); S.nLinks = inst.nLinks
     return inst
   }
   function setSize(cssW, cssH, dpr) { canvas.width = Math.max(2, Math.round(cssW * dpr)); canvas.height = Math.max(2, Math.round(cssH * dpr)); S.dpr = dpr; S.cssW = cssW; S.cssH = cssH; freeFbo(S.fboF); S.fboF = null }
 
+  // 층 연결 점선용 버퍼: 납작한 사각형 하나를 선마다 복제해서(인스턴싱) 화면에서 일정한 굵기로 그림
+  const quadB = gl.createBuffer(), linkB = gl.createBuffer(), linkVao = gl.createVertexArray()
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadB); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, -1, 0, 1, 1, -1, 1, 1]), gl.STATIC_DRAW)
+  gl.bindVertexArray(linkVao); gl.bindBuffer(gl.ARRAY_BUFFER, quadB); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+  gl.bindBuffer(gl.ARRAY_BUFFER, linkB)
+  for (const [loc, size, off] of [[1, 3, 0], [2, 3, 12], [3, 1, 24]]) { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, LINK_FLOATS * 4, off); gl.vertexAttribDivisor(loc, 1) }
+  gl.bindVertexArray(null)
   const camUniforms = (cam, aspect, sec) => {
     const { vp } = viewProjection(cam, aspect), { eye, fwd } = basisOf(cam)
     gl.uniformMatrix4fv(boxP.u.uVP, false, new Float32Array(vp)); gl.uniform3fv(boxP.u.uEye, eye); gl.uniform3fv(boxP.u.uFwd, fwd); gl.uniform3fv(boxP.u.uLight, LIGHT)
@@ -308,6 +356,17 @@ export function createRenderer(canvas) {
   }
   const drawEnv = g => { gl.bindVertexArray(g.vao); gl.drawArrays(gl.TRIANGLES, 0, g.count) }
 
+  /** 층 연결 점선: 박스를 다 그린 뒤, 깊이 판정은 켜고(다른 박스 뒤로는 가려짐) 깊이는 쓰지 않고 그림 */
+  function drawLinks(a) {
+    if (a.showLinks === false || !S.nLinks) return
+    const { vp } = viewProjection(a.cam, a.aspect), { eye, fwd } = basisOf(a.cam), sec = a.sec, dpr = S.dpr || 1, gc = a.gridColor || [1, 1, 1]
+    gl.useProgram(lineP.p); gl.uniformMatrix4fv(lineP.u.uVP, false, new Float32Array(vp)); gl.uniform3fv(lineP.u.uEye, eye); gl.uniform3fv(lineP.u.uFwd, fwd)
+    gl.uniform1f(lineP.u.uSecOn, sec && sec.on ? 1 : 0); gl.uniform1f(lineP.u.uSecDist, sec ? sec.dist : 0)
+    gl.uniform2f(lineP.u.uView, canvas.width, canvas.height); gl.uniform1f(lineP.u.uPx, 2 * dpr); gl.uniform1f(lineP.u.uDash, 4 * dpr); gl.uniform3f(lineP.u.uColor, gc[0], gc[1], gc[2])
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE)
+    gl.bindVertexArray(linkVao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, S.nLinks); gl.bindVertexArray(null)
+    gl.enable(gl.CULL_FACE); gl.depthMask(true); gl.disable(gl.BLEND)
+  }
   function draw(a) {   // a: { cam, aspect, time, bg:[r,g,b], pal, hover, sec:{on,dist} }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height)
     gl.clearColor(a.bg[0], a.bg[1], a.bg[2], 1); gl.clearDepth(1); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.BLEND)
@@ -324,6 +383,7 @@ export function createRenderer(canvas) {
     gl.uniform1f(boxP.u.uShowText, a.showText === false ? 0 : 1); bindGlyph()
     drawBoxes('solid')
     if (S.inst && S.inst.nGhost) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); drawBoxes('ghost'); gl.depthMask(true); gl.disable(gl.BLEND) }
+    drawLinks(a)
     gl.bindVertexArray(null)
   }
   /** 박스마다 고유 색으로 그려서 화면의 각 점이 어느 박스인지 알아냄. withGhost: 반투명 박스도 눌리게 */
@@ -373,8 +433,8 @@ export function createRenderer(canvas) {
   }
   function dispose() {
     freeEnv(); freeFbo(S.fboS); freeFbo(S.fboF); if (S.vaoSolid) { gl.deleteVertexArray(S.vaoSolid); gl.deleteVertexArray(S.vaoGhost) }
-    if (S.glyph) gl.deleteTexture(S.glyph.tex); gl.deleteBuffer(cubeVB); gl.deleteBuffer(cubeIB); gl.deleteBuffer(instB); gl.deleteProgram(envP.p); gl.deleteProgram(boxP.p)
+    if (S.glyph) gl.deleteTexture(S.glyph.tex); gl.deleteBuffer(quadB); gl.deleteBuffer(linkB); gl.deleteVertexArray(linkVao); gl.deleteBuffer(cubeVB); gl.deleteBuffer(cubeIB); gl.deleteBuffer(instB); gl.deleteProgram(envP.p); gl.deleteProgram(boxP.p)
     gl.getExtension('WEBGL_lose_context')?.loseContext()
   }
-  return { gl, canvas, faceText: true, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: (cam) => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.env ? S.env.wallH : 3 } }
+  return { gl, canvas, faceText: true, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: (cam) => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get linkCount() { return S.nLinks || 0 }, get wallH() { return S.env ? S.env.wallH : 3 } }
 }
