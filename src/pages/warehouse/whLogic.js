@@ -77,7 +77,7 @@ export function insideRect(r, W, H) {
   const e = 1e-6
   return r.x >= -e && r.y >= -e && r.x + r.w <= W + e && r.y + r.h <= H + e
 }
-export const OFFICE_W = 3.2, OFFICE_H = 2.6
+export const OFFICE_W = 6, OFFICE_H = 4.9           // 사무실 크기 (예전 3.2 × 2.6 의 약 1.9배)
 export const officeRect = f => ({ x: (f.x ?? 0) - OFFICE_W / 2, y: (f.y ?? 0) - OFFICE_H / 2, w: OFFICE_W, h: OFFICE_H })
 
 /** 구역 위치/크기가 올바른지: 창고 안, 최소 크기, 다른 구역·사무실과 겹치지 않음 */
@@ -108,11 +108,14 @@ export const REASON_TEXT = {
   'office-on-zone': '구역과 겹치지 않는 곳에 놓아주세요',
   'office-on-office': '다른 사무실과 겹쳐요',
   'no-warehouse': '먼저 창고를 그려주세요',
+  'wh-small': `창고가 너무 작아요 (최소 ${LIMITS.whMin[0]} × ${LIMITS.whMin[1]} m)`,
+  'wh-big': `창고가 너무 커요 (최대 ${LIMITS.whMax[0]} × ${LIMITS.whMax[1]} m)`,
+  'zone-out': '구역이 창고 밖으로 나가요. 먼저 구역을 옮기거나 줄여주세요',
 }
 
 // ── 시설물(창문/출입구/사무실) ───────────────────────────────
 export const FIXTURE_LABEL = { window: '창문', door: '출입구', office: '사무실' }
-export const FIXTURE_SIZE = { window: 2.4, door: 2.2 }      // 벽 따라 차지하는 길이
+export const FIXTURE_SIZE = { window: 2.4, door: 4.6 }      // 벽 따라 차지하는 길이 (출입문은 예전 2.2 의 2배)
 export function fixtureLen(kind, W, H, wall) {
   const wallLen = (wall === 'top' || wall === 'bottom') ? W : H
   return Math.min(FIXTURE_SIZE[kind] || 2, wallLen * 0.35)
@@ -247,6 +250,63 @@ export function boxesLostBy(zone, { tiers, lineCount, slotCount }) {
     }
   })
   return lost
+}
+
+// ═══════════════════════════════════════════════════════════
+//  창고 크기 바꾸기: 가장자리/모서리를 끌어서 가로·세로를 자유롭게 (왼쪽/위를 옮기면 구역도 같이 따라가서 제자리에 있음)
+//  rect = { x0, y0, x1, y1 } : 지금 좌표(창고 왼쪽 위 = 0, 0)에서 본 새 창고 범위
+// ═══════════════════════════════════════════════════════════
+export function checkWarehouseRect(model, rect) {
+  const w = rect.x1 - rect.x0, h = rect.y1 - rect.y0, eps = 1e-6
+  if (w < LIMITS.whMin[0] - eps || h < LIMITS.whMin[1] - eps) return { ok: false, reason: 'wh-small' }
+  if (w > LIMITS.whMax[0] + eps || h > LIMITS.whMax[1] + eps) return { ok: false, reason: 'wh-big' }
+  for (const z of model.zones) if (z.x < rect.x0 - eps || z.y < rect.y0 - eps || z.x + z.w > rect.x1 + eps || z.y + z.h > rect.y1 + eps) return { ok: false, reason: 'zone-out', zone: z.name }
+  return { ok: true, width: round2(w), height: round2(h), dx: round2(-rect.x0) + 0, dy: round2(-rect.y0) + 0 }      // + 0 : -0 을 0 으로
+}
+/** 사무실이 창고 밖으로 나가지 않게 안쪽으로 (옮긴 만큼 dx, dy 를 더한 뒤) */
+export const officeInside = (f, W, H, dx = 0, dy = 0) => ({
+  x: round2(clamp((f.x ?? 0) + dx, OFFICE_W / 2 + 0.2, W - OFFICE_W / 2 - 0.2)),
+  y: round2(clamp((f.y ?? 0) + dy, OFFICE_H / 2 + 0.2, H - OFFICE_H / 2 - 0.2)),
+})
+
+// ═══════════════════════════════════════════════════════════
+//  박스 옮기기 (다른 칸 / 다른 줄 / 다른 구역)
+//  규칙: 옮긴 자리의 맨 위에 놓이고, 원래 자리에서 그 위에 있던 박스는 한 층씩 내려앉음 (공중에 뜬 박스가 생기지 않게)
+//  target: { zoneId, lineId, slot }
+// ═══════════════════════════════════════════════════════════
+export function planBoxMove(model, boxId, target) {
+  const no = (reason, text) => ({ ok: false, reason, text })
+  const box = model.boxesById.get(boxId)
+  if (!box) return no('no-box', '박스를 찾을 수 없어요')
+  const zone = model.zonesById.get(target.zoneId), line = model.linesById.get(target.lineId)
+  if (!zone || !line || line.zone_id !== zone.id) return no('no-target', '놓을 자리를 찾을 수 없어요')
+  const slot = target.slot
+  if (!(slot >= 1 && slot <= line.slot_count)) return no('no-slot', '그 칸은 없어요')
+  const sameStack = box.line_id === line.id && box.slot_no === slot
+  const tStack = stackAt(line, slot)
+  const toTier = (sameStack ? tStack.length - 1 : tStack.length) + 1
+  if (toTier > zone.tiers) return no('full', `${zone.name} ${line.no}번째 줄 ${slot}번째 칸은 가득 찼어요 (최대 ${zone.tiers}층)`)
+  const srcStack = stackAt(model.linesById.get(box.line_id), box.slot_no)
+  const above = srcStack.filter(b => b.tier > box.tier)
+  if (sameStack && !above.length) return no('same', '이미 그 칸의 맨 위에 있어요')
+  const steps = []
+  if (!sameStack) {
+    steps.push({ id: box.id, patch: { zone_id: zone.id, line_id: line.id, slot_no: slot, tier: toTier } })
+    for (const b of above) steps.push({ id: b.id, patch: { tier: b.tier - 1 } })                  // 낮은 층부터 한 칸씩 내려옴 (비어 있는 자리로만 움직여서 겹치지 않음)
+  } else {                                                                                     // 같은 칸 안에서 맨 위로: 잠깐 치워 두고 → 위 박스들이 내려오고 → 맨 위에 올림
+    steps.push({ id: box.id, patch: { tier: srcStack.length + 100 } })
+    for (const b of above) steps.push({ id: b.id, patch: { tier: b.tier - 1 } })
+    steps.push({ id: box.id, patch: { tier: toTier } })
+  }
+  return { ok: true, same: sameStack, fromTier: box.tier, toTier, falls: above.length, steps, target: { zoneName: zone.name, lineNo: line.no, slot } }
+}
+/** 충돌/중단으로 층에 빈틈이 생긴 칸을 찾아 1,2,3… 으로 다시 붙일 계획 (낮은 층부터 → 겹치지 않음) */
+export function stackRepairs(raw) {
+  const groups = new Map()
+  for (const b of raw.boxes) { const k = `${b.line_id}|${b.slot_no}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b) }
+  const fixes = []
+  for (const arr of groups.values()) { arr.sort((a, b) => a.tier - b.tier); arr.forEach((b, i) => { if (b.tier !== i + 1) fixes.push({ id: b.id, tier: i + 1 }) }) }
+  return fixes
 }
 
 // ═══════════════════════════════════════════════════════════
