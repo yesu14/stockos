@@ -4,7 +4,8 @@
 //  조작(왼쪽=돌리기 · 오른쪽=이동 · 휠=확대, OrbitControls 와 같은 방식), 번호표, 설정 창은 Scene3DGL 과 같은 코드를 씀.
 //  좌표: 평면도는 y 가 아래로 늘어나는데 Three.js 는 y 가 위쪽이라, 그릴 때 y 를 뒤집어서(−y) 평면도와 같은 방향으로 보이게 함.
 // ═══════════════════════════════════════════════════════════
-import { buildEnv, buildInstances } from './gl3d'
+import { buildEnv, buildInstances, LINK_FLOATS } from './gl3d'
+import { TXT, FACES, faceLayout, labelChars, buildGlyphMasks as realMasks, glyphRGBA } from './faceText'
 import { basisOf, makeProjector, depthRange, FOV, NEAR, FAR } from './cam3d'
 
 export const THREE_VERSION = '0.160.0'
@@ -22,23 +23,87 @@ const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[
 const AMBER = [1, 0.72, 0.15], PINK = [1, 0.31, 0.58], WHITE = [1, 1, 1]
 const baseColor = m => (m.state === 1 ? mix(m.rgb, AMBER, 0.3) : m.state === 2 ? mix(m.rgb, PINK, 0.38) : m.rgb)
 
-export function createThreeRenderer(canvas, T) {
+export function createThreeRenderer(canvas, T, deps = {}) {
+  const buildGlyphMasks = deps.buildGlyphMasks || realMasks            // (시험용: 글자 그림을 대신 만드는 함수를 넣을 수 있음)
   T.ColorManagement.enabled = false                                  // 우리가 정한 색을 변환 없이 그대로
   const renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' })
   renderer.outputColorSpace = T.LinearSRGBColorSpace
   const scene = new T.Scene(), camera = new T.PerspectiveCamera((FOV * 180) / Math.PI, 1, NEAR, FAR)
   camera.up.set(0, 0, 1)                                              // 위쪽 = z
   const raycaster = new T.Raycaster()
+  const planeGeo = new T.PlaneGeometry(1, 1)                        // 글자 하나를 붙이는 판 (박스 면 위에 올림)
   const boxGeo = new T.BoxGeometry(1, 1, 1)                          // 단위 상자 (박스마다 크기/위치만 바꿔 한 번에 그림)
   { const nrm = boxGeo.getAttribute('normal'), n = nrm.count, col = new Float32Array(n * 3)
     for (let i = 0; i < n; i++) { const s = shade(nrm.array[i * 3], -nrm.array[i * 3 + 1], nrm.array[i * 3 + 2]); col[i * 3] = s; col[i * 3 + 1] = s; col[i * 3 + 2] = s }
     boxGeo.setAttribute('color', new T.BufferAttribute(col, 3)) }
-  const S = { env: [], grid: null, solid: null, ghost: null, inst: null, base: [], hidden: [], special: [], secOn: false, cssW: 1, cssH: 1, lastCam: null, lastAspect: 1, lastSec: null, lastGhost: false, hover: -1, wallH: 3 }
+  const S = { env: [], grid: null, solid: null, ghost: null, inst: null, base: [], hidden: [], special: [], secOn: false, cssW: 1, cssH: 1, lastCam: null, lastAspect: 1, lastSec: null, lastGhost: false, hover: -1, wallH: 3,
+    faces: [], faceRefs: [], glyphs: new Map(), atlas: null, faceWorld: 1, links: null, nLinks: 0, linkHidden: [], featureError: '' }
   const tmp = { m: new T.Matrix4(), q: new T.Quaternion(), p: new T.Vector3(), s: new T.Vector3(), c: new T.Color(), ndc: new T.Vector2() }
   const free = o => { scene.remove(o); if (o.geometry && o.geometry !== boxGeo) o.geometry.dispose(); if (o.material) o.material.dispose() }
   const meshOf = i => (S.inst && i < S.inst.nSolid ? [S.solid, i] : [S.ghost, i - (S.inst ? S.inst.nSolid : 0)])
   const place = (mesh, local, m, hide) => { const k = hide ? 1e-5 : 1; tmp.p.set(m.cx, -m.cy, m.cz); tmp.s.set(m.sx * k, m.sy * k, m.sz * k); tmp.m.compose(tmp.p, tmp.q, tmp.s); mesh.setMatrixAt(local, tmp.m) }
   const paint = (i, c) => { const [mesh, li] = meshOf(i); if (!mesh) return; tmp.c.setRGB(c[0], c[1], c[2]); mesh.setColorAt(li, tmp.c); mesh.instanceColor.needsUpdate = true }
+
+  // ── 박스 면의 번호: 글자 하나마다 판 하나 (글자 종류 × 진하기별로 InstancedMesh 하나씩). 규칙은 faceText.js — 기본 3D 와 같음 ──
+  const GLYPH_ALPHA = { s: 1, x: 0.9, d: 0.13 }          // 보통 / 반투명 보기 / 검색으로 흐려진 박스
+  const smooth = (a, b, v) => { const k = clamp((v - a) / (b - a), 0, 1); return k * k * (3 - 2 * k) }
+  const freeFaces = () => { for (const r of S.faces) { scene.remove(r.mesh); r.mesh.material.dispose() } S.faces = []; S.faceRefs = [] }
+  function ensureAtlas(meta) {
+    const need = new Set(['?']); for (const m of meta) for (const ch of labelChars(m.number)) need.add(ch)
+    if (S.atlas && [...need].every(c => S.atlas.map.has(c))) return
+    const chars = [...new Set([...(S.atlas ? S.atlas.chars : []), ...need])].slice(0, TXT.MAX)
+    S.atlas = { ...buildGlyphMasks(chars), map: new Map(chars.map((c, i) => [c, i])) }
+    for (const x of S.glyphs.values()) x.dispose(); S.glyphs.clear()
+  }
+  function glyphTexture(ch) {
+    let x = S.glyphs.get(ch); if (x) return x
+    x = new T.DataTexture(glyphRGBA(S.atlas, S.atlas.map.get(ch) ?? S.atlas.map.get('?')), TXT.CW, TXT.CH, T.RGBAFormat, T.UnsignedByteType)
+    x.generateMipmaps = true; x.minFilter = T.LinearMipmapLinearFilter; x.magFilter = T.LinearFilter                  // DataTexture 는 기본이 '계단식(Nearest)'이라 부드럽게 바꿔줘야 함
+    const cap = renderer.capabilities; x.anisotropy = Math.min(8, cap && cap.getMaxAnisotropy ? cap.getMaxAnisotropy() : 1); x.needsUpdate = true
+    S.glyphs.set(ch, x); return x
+  }
+  function buildFaces(inst) {
+    freeFaces(); ensureAtlas(inst.meta)
+    const groups = new Map(), widths = []; S.faceRefs = inst.meta.map(() => [])
+    inst.meta.forEach((m, bi) => {
+      const cs = labelChars(m.number); if (!cs.length) return
+      widths.push(Math.min(m.sx, m.sy))
+      const ak = m.ghost ? (m.a > 0.2 ? 'x' : 'd') : 's', eps = Math.max(0.01, 0.004 * Math.max(m.sx, m.sy, m.sz))
+      for (const n of FACES) {
+        const L = faceLayout(m, n, cs.length), wq = L.adv / TXT.SQ, hq = L.th
+        cs.forEach((ch, k) => {
+          const off = (k - (cs.length - 1) / 2) * L.adv, key = ch + '|' + ak
+          let g = groups.get(key); if (!g) { g = { ch, ak, mats: [], owners: [] }; groups.set(key, g) }
+          const px = L.center[0] + n[0] * eps + L.tx[0] * off, py = L.center[1] + n[1] * eps + L.tx[1] * off, pz = L.center[2] + n[2] * eps + L.tx[2] * off
+          // 판의 가로(tx) · 세로(ty) · 앞(n) 방향. 평면도 y 를 뒤집어 그리므로 y 성분만 부호를 바꾸면 거울상 없이 똑바로 읽힘 (오른손 좌표라 앞면 방향도 맞음)
+          g.mats.push(L.tx[0] * wq, -L.tx[1] * wq, L.tx[2] * wq, 0, L.ty[0] * hq, -L.ty[1] * hq, L.ty[2] * hq, 0, n[0], -n[1], n[2], 0, px, -py, pz, 1)
+          g.owners.push(bi)
+        })
+      }
+    })
+    widths.sort((a, b) => a - b); S.faceWorld = widths.length ? widths[Math.floor(widths.length / 2)] : 1
+    for (const g of groups.values()) {
+      const mat = new T.MeshBasicMaterial({ map: glyphTexture(g.ch), transparent: true, opacity: GLYPH_ALPHA[g.ak], depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })
+      const mesh = new T.InstancedMesh(planeGeo, mat, g.owners.length); mesh.instanceMatrix.array.set(g.mats); mesh.instanceMatrix.needsUpdate = true
+      mesh.frustumCulled = false; mesh.renderOrder = g.ak === 's' ? 3 : 4; mesh.name = 'wh-face'; scene.add(mesh)
+      const rec = { mesh, base: Float32Array.from(g.mats), alpha: GLYPH_ALPHA[g.ak], dirty: false }
+      g.owners.forEach((bi, k) => S.faceRefs[bi].push({ rec, k })); S.faces.push(rec)
+    }
+  }
+  const hideFaces = (bi, hide) => {
+    for (const { rec, k } of S.faceRefs[bi] || []) { const a = rec.mesh.instanceMatrix.array; if (hide) a.fill(0, k * 16, k * 16 + 16); else a.set(rec.base.subarray(k * 16, k * 16 + 16), k * 16); rec.dirty = true }
+  }
+  // ── 층 연결 점선: 위층 박스 ↔ 바로 아래 박스 사이 (세로선, 점선) ──
+  function freeLinks() { if (S.links) { scene.remove(S.links.line); S.links.line.geometry.dispose(); S.links.line.material.dispose(); S.links = null } S.nLinks = 0; S.linkHidden = [] }
+  function buildLinks(inst) {
+    freeLinks(); const n = inst.nLinks; if (!n) return
+    const pos = new Float32Array(n * 6), col = new Float32Array(n * 6), mids = new Float32Array(n * 3), alpha = new Float32Array(n)
+    for (let j = 0; j < n; j++) { const s = inst.links.subarray(j * LINK_FLOATS, (j + 1) * LINK_FLOATS); pos.set([s[0], -s[1], s[2], s[3], -s[4], s[5]], j * 6); mids.set([(s[0] + s[3]) / 2, (s[1] + s[4]) / 2, (s[2] + s[5]) / 2], j * 3); alpha[j] = s[6] }
+    const g = new T.BufferGeometry(); g.setAttribute('position', new T.BufferAttribute(pos, 3)); g.setAttribute('color', new T.BufferAttribute(col, 3))
+    const line = new T.LineSegments(g, new T.LineDashedMaterial({ vertexColors: true, dashSize: 0.3, gapSize: 0.3, depthWrite: false }))
+    line.computeLineDistances(); line.frustumCulled = false; line.renderOrder = 5; line.name = 'wh-link'; scene.add(line)
+    S.links = { line, pos, base: Float32Array.from(pos), col, mids, alpha, key: '' }; S.nLinks = n; S.linkHidden = new Array(n).fill(false)
+  }
 
   function setEnv(model, spread, pal, activeZoneId) {
     for (const o of S.env) free(o); S.env = []; if (S.grid) { free(S.grid); S.grid = null }
@@ -77,6 +142,8 @@ export function createThreeRenderer(canvas, T) {
       mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; scene.add(mesh); return mesh
     }
     S.solid = make(0, inst.nSolid, false); S.ghost = make(inst.nSolid, inst.nGhost, true)
+    S.featureError = ''
+    try { buildFaces(inst); buildLinks(inst) } catch (e) { S.featureError = String((e && e.message) || e); freeFaces(); freeLinks(); if (typeof console !== 'undefined') console.warn('Three.js: 박스 번호/층 점선을 만들지 못해서 이 기능만 껐어요', e) }   // 박스 그리기는 그대로 둠
     return inst
   }
   function setSize(cssW, cssH, dpr) { S.cssW = cssW; S.cssH = cssH; renderer.setPixelRatio(dpr); renderer.setSize(cssW, cssH, false) }
@@ -91,9 +158,18 @@ export function createThreeRenderer(canvas, T) {
     const { eye, fwd } = basisOf(cam), meta = S.inst.meta; let ch = false
     for (let i = 0; i < meta.length; i++) {
       const m = meta[i], hide = on && ((m.cx - eye[0]) * fwd[0] + (m.cy - eye[1]) * fwd[1] + (m.cz - eye[2]) * fwd[2]) < sec.dist
-      if (hide !== S.hidden[i]) { S.hidden[i] = hide; const [mesh, li] = meshOf(i); if (mesh) { place(mesh, li, m, hide); ch = true } }
+      if (hide !== S.hidden[i]) { S.hidden[i] = hide; const [mesh, li] = meshOf(i); if (mesh) { place(mesh, li, m, hide); ch = true } hideFaces(i, hide) }
     }
     if (ch) { if (S.solid) S.solid.instanceMatrix.needsUpdate = true; if (S.ghost) S.ghost.instanceMatrix.needsUpdate = true }
+    for (const r of S.faces) if (r.dirty) { r.mesh.instanceMatrix.needsUpdate = true; r.dirty = false }
+    const L = S.links; if (L) {                                         // 점선도 같은 규칙: 잘린 쪽의 선은 길이 0 으로 줄여서 안 보이게
+      let lc = false
+      for (let j = 0; j < S.nLinks; j++) {
+        const hide = on && ((L.mids[j * 3] - eye[0]) * fwd[0] + (L.mids[j * 3 + 1] - eye[1]) * fwd[1] + (L.mids[j * 3 + 2] - eye[2]) * fwd[2]) < sec.dist
+        if (hide !== S.linkHidden[j]) { S.linkHidden[j] = hide; if (hide) { L.pos.set(L.base.subarray(j * 6, j * 6 + 3), j * 6 + 3) } else L.pos.set(L.base.subarray(j * 6, j * 6 + 6), j * 6); lc = true }
+      }
+      if (lc) L.line.geometry.getAttribute('position').needsUpdate = true
+    }
   }
   function updateColors(time, hover) {                                  // 검색한 박스 깜빡임 + 마우스를 올린 박스 밝게
     const pulse = 0.5 + 0.5 * Math.sin(time * 5)
@@ -105,6 +181,16 @@ export function createThreeRenderer(canvas, T) {
     setCam(a.cam, a.aspect); S.lastCam = a.cam; S.lastAspect = a.aspect; S.lastSec = a.sec
     if (S.inst) { applySection(a.cam, a.sec); updateColors(a.time || 0, a.hover ?? -1) }
     if (S.grid) { const g = a.gridColor || [1, 1, 1]; S.grid.material.color.setRGB(g[0], g[1], g[2]); S.grid.material.opacity = a.gridAlpha ?? 0.16 }
+    if (S.faces.length) {                                               // 번호: 박스가 화면에서 작으면 서서히 사라짐 (기본 3D 는 면마다 따로 계산, 여기서는 박스 크기 기준으로 한꺼번에)
+      const ppu = S.cssH / (2 * a.cam.dist * Math.tan(FOV / 2)), f = smooth(7, 14, S.faceWorld * ppu), show = a.showText !== false && f > 0.02
+      for (const r of S.faces) { r.mesh.visible = show; r.mesh.material.opacity = r.alpha * f }
+    }
+    const LK = S.links; if (LK) {
+      LK.line.visible = a.showLinks !== false
+      const bg = a.bg, gc = a.gridColor || [1, 1, 1], key = [bg[0], bg[1], bg[2], gc[0], gc[1], gc[2]].join(',')
+      if (key !== LK.key) { LK.key = key; for (let j = 0; j < S.nLinks; j++) for (let v = 0; v < 2; v++) for (let c = 0; c < 3; c++) LK.col[j * 6 + v * 3 + c] = bg[c] + (gc[c] - bg[c]) * LK.alpha[j]; LK.line.geometry.getAttribute('color').needsUpdate = true }   // 진하기는 배경과 섞은 색으로 흉내
+      const d = clamp(4 * ((2 * a.cam.dist * Math.tan(FOV / 2)) / Math.max(1, S.cssH)), 0.04, 1.2); LK.line.material.dashSize = d; LK.line.material.gapSize = d   // 점 하나가 화면에서 약 4픽셀
+    }
     renderer.setClearColor(tmp.c.setRGB(a.bg[0], a.bg[1], a.bg[2]), 1)
     renderer.render(scene, camera)
   }
@@ -140,7 +226,7 @@ export function createThreeRenderer(canvas, T) {
   }
   function dispose() {
     for (const o of S.env) free(o); if (S.grid) free(S.grid); for (const k of ['solid', 'ghost']) if (S[k]) free(S[k])
-    boxGeo.dispose(); renderer.dispose(); if (renderer.forceContextLoss) renderer.forceContextLoss()
+    freeFaces(); freeLinks(); for (const x of S.glyphs.values()) x.dispose(); planeGeo.dispose(); boxGeo.dispose(); renderer.dispose(); if (renderer.forceContextLoss) renderer.forceContextLoss()
   }
-  return { canvas, faceText: false, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: cam => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.wallH } }
+  return { canvas, get faceText() { return !S.featureError }, get featureError() { return S.featureError }, get linkCount() { return S.nLinks }, setEnv, setBoxes, setSize, draw, pick, visibility, idAtLast, dispose, depthRangeOf: cam => (S.inst && S.inst.bbox ? depthRange(cam, S.inst.bbox) : [0, 1]), get inst() { return S.inst }, get wallH() { return S.wallH } }
 }

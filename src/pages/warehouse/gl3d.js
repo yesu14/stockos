@@ -3,30 +3,22 @@
 //  박스는 GPU 로 한 번에(인스턴싱) 그리고, 깊이 버퍼로 앞뒤를 정확히 가림 처리함.
 //  ID 렌더링(박스마다 고유 색)으로 ① 클릭/마우스 올림 판정 ② 실제로 보이는 박스와 보이는 위치(번호를 붙일 곳)를 알아냄.
 // ═══════════════════════════════════════════════════════════
+import { TXT, buildGlyphMasks, labelChars } from './faceText'
 import { hexToRgb, fixtureLen, officeRect } from './whLogic'
 import { tierGeom, wallHeight, SPREAD_DEFAULT } from './render3d'
 import { viewProjection, basisOf, depthRange } from './cam3d'
 
-// ── 박스 면에 쓰는 번호 글자판 ─────────────────────────────
-const GFONT = 'system-ui, -apple-system, "Segoe UI", "Noto Sans KR", "Malgun Gothic", sans-serif'
-const G_CW = 60, G_CH = 96, G_COLS = 16, G_MAX = 256, TXT_MAX = 8          // 글자 칸(폭×높이), 한 줄 칸 수, 최대 글자 종류, 박스 하나에 쓸 최대 글자 수
+// ── 박스 면에 쓰는 번호: 규칙(크기·방향·글자판)은 faceText.js 에 있음 (Three.js · 예전 3D 와 같은 규칙) ──
 const STRIDE = 19                                                          // 박스 하나의 데이터 수: 위치3 크기3 색4 상태1 + 글자 8
-function buildAtlas(chars) {
-  const rows = Math.max(1, Math.ceil(chars.length / G_COLS)), cv = document.createElement('canvas'); cv.width = G_COLS * G_CW; cv.height = rows * G_CH
-  const ctx = cv.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.font = `800 ${Math.round(G_CH * 0.66)}px ${GFONT}`
-  chars.forEach((c, i) => {
-    const x = (i % G_COLS) * G_CW + G_CW / 2, y = Math.floor(i / G_COLS) * G_CH + G_CH * 0.78, w = ctx.measureText(c).width
-    if (w > G_CW * 0.78) { ctx.save(); ctx.translate(x, y); ctx.scale((G_CW * 0.78) / w, 1); ctx.fillText(c, 0, 0); ctx.restore() } else ctx.fillText(c, x, y)
-  })
-  return { cv, rows }
-}
+const F3 = v => v.toFixed(3)
+
 // ── 층 연결 점선 ─────────────────────────────────────────────
 const LINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aQ;
 layout(location=1) in vec3 iP0; layout(location=2) in vec3 iP1; layout(location=3) in float iA;
 uniform mat4 uVP; uniform vec2 uView; uniform float uPx; uniform vec3 uEye; uniform vec3 uFwd; uniform float uSecOn; uniform float uSecDist;
-out float vA; out vec3 vWorld; flat out vec2 vS0; flat out vec2 vDir;
+out float vA; out float vSide; out vec3 vWorld; flat out vec2 vS0; flat out vec2 vDir;
 void main() {
   vec4 c0 = uVP * vec4(iP0, 1.0), c1 = uVP * vec4(iP1, 1.0);
   bool hidden = (uSecOn > 0.5 && dot((iP0 + iP1) * 0.5 - uEye, uFwd) < uSecDist) || c0.w < 0.05 || c1.w < 0.05;   // 단면으로 잘렸거나 카메라 뒤로 넘어가는 선은 그리지 않음
@@ -36,17 +28,19 @@ void main() {
   vec4 c = aQ.x < 0.5 ? c0 : c1; vec2 sc = aQ.x < 0.5 ? s0 : s1;
   vec2 sp = sc + vec2(-dir.y, dir.x) * aQ.y * uPx * 0.5;
   gl_Position = vec4((sp / uView * 2.0 - 1.0) * c.w, c.z, c.w);
-  vWorld = aQ.x < 0.5 ? iP0 : iP1; vA = iA; vS0 = s0; vDir = dir;
+  vWorld = aQ.x < 0.5 ? iP0 : iP1; vA = iA; vSide = aQ.y; vS0 = s0; vDir = dir;
 }`
 const LINE_FS = `#version 300 es
 precision highp float;
-in float vA; in vec3 vWorld; flat in vec2 vS0; flat in vec2 vDir;
+in float vA; in float vSide; in vec3 vWorld; flat in vec2 vS0; flat in vec2 vDir;
 uniform vec3 uColor; uniform float uDash;
 out vec4 o;
 void main() {
   float s = dot(gl_FragCoord.xy - vS0, vDir);
   if (mod(s, uDash * 2.0) > uDash) discard;           // 점선: 켜짐/꺼짐을 같은 길이로 반복
-  o = vec4(uColor, vA);
+  float core = step(abs(vSide), 0.5);                    // 가운데 절반은 점 색, 바깥 절반은 반대색 테두리 (밝은 박스 면 위에서도, 어두운 배경 위에서도 보이게)
+  vec3 cas = dot(uColor, vec3(0.299, 0.587, 0.114)) > 0.5 ? vec3(0.05, 0.08, 0.15) : vec3(1.0);
+  o = vec4(mix(cas, uColor, core), vA * mix(0.75, 1.0, core));
 }`
 const LIGHT = (() => { const v = [-0.4, -0.5, 0.77], l = Math.hypot(...v); return v.map(x => x / l) })()
 const rgbf = hex => hexToRgb(hex).map(v => v / 255)
@@ -102,30 +96,31 @@ uniform vec3 uLight; uniform float uPass; uniform float uTime; uniform float uHo
 uniform sampler2D uGlyph; uniform vec2 uGlyphGrid; uniform float uShowText;
 out vec4 o;
 // 박스의 한 면(법선 n)의 한가운데에 번호를 그림. 옆면은 위쪽이 위, 윗면은 평면도와 같은 방향(오른쪽=+x, 위쪽=평면도 위), 어느 면에서도 거울처럼 뒤집히지 않음
-float faceText(vec3 n) {
-  if (uShowText < 0.5) return 0.0;
+// 반환: x = 글자 모양, y = 흰 테두리 (둘 다 0~1)
+vec2 faceText(vec3 n) {
+  if (uShowText < 0.5) return vec2(0.0);
   float cnt = step(0.0, vC0.x) + step(0.0, vC0.y) + step(0.0, vC0.z) + step(0.0, vC0.w) + step(0.0, vC1.x) + step(0.0, vC1.y) + step(0.0, vC1.z) + step(0.0, vC1.w);
-  if (cnt < 0.5) return 0.0;
+  if (cnt < 0.5) return vec2(0.0);
   vec3 tx, ty;
   if (n.z > 0.5) { tx = vec3(1.0, 0.0, 0.0); ty = vec3(0.0, -1.0, 0.0); }
   else if (n.z < -0.5) { tx = vec3(1.0, 0.0, 0.0); ty = vec3(0.0, 1.0, 0.0); }
   else { tx = vec3(n.y, -n.x, 0.0); ty = vec3(0.0, 0.0, 1.0); }
   vec2 p = vec2(dot(vLocal, tx), dot(vLocal, ty));
   vec2 hf = vec2(dot(abs(tx), vHalf), dot(abs(ty), vHalf));
-  const float CA = 0.5, SQ = 0.8;     // 글자 간격(높이 대비) / 글자 칸의 가운데 80% 만 씀 (숫자 사이가 벌어지지 않게)
-  float th = min(hf.y * 2.0 * 0.56, hf.x * 2.0 * 0.86 / (cnt * CA));
+  const float CA = ${F3(TXT.CA)}, SQ = ${F3(TXT.SQ)};
+  float th = min(hf.y * 2.0 * ${F3(TXT.FILL_H)}, hf.x * 2.0 * ${F3(TXT.FILL_W)} / (cnt * CA));
   float u = p.x / (CA * th) + cnt * 0.5, fy = p.y / th + 0.5, ci = floor(u), fx = u - ci;
   vec2 dx = vec2(dFdx(u), dFdx(fy)), dy = vec2(dFdy(u), dFdy(fy));
   float thPx = th / max(length(vec2(dFdx(p.y), dFdy(p.y))), 1e-6);
-  float fade = smoothstep(4.0, 8.0, thPx);       // 글자가 너무 작아 뭉개질 때는 서서히 사라짐 (멀리서 지저분한 점처럼 보이지 않게)
-  if (fade <= 0.0) return 0.0;
+  float fade = smoothstep(3.5, 7.0, thPx);       // 글자가 너무 작아 뭉개질 때는 서서히 사라짐 (멀리서 지저분한 점처럼 보이지 않게)
+  if (fade <= 0.0) return vec2(0.0);
   int ki = int(clamp(ci, 0.0, cnt - 1.0));
   float gi = ki < 4 ? vC0[ki] : vC1[ki - 4];
   float gc = mod(gi, uGlyphGrid.x), gr = floor(gi / uGlyphGrid.x);
   vec2 uv = vec2((gc + 0.5 + (fx - 0.5) * SQ) / uGlyphGrid.x, (gr + 1.0 - fy) / uGlyphGrid.y);
   vec2 gx = vec2(dx.x * SQ / uGlyphGrid.x, -dx.y / uGlyphGrid.y), gy = vec2(dy.x * SQ / uGlyphGrid.x, -dy.y / uGlyphGrid.y);
   float inside = step(0.0, ci) * step(ci, cnt - 1.0) * step(abs(fy - 0.5), 0.5);
-  return textureGrad(uGlyph, uv, gx, gy).a * inside * fade;
+  return textureGrad(uGlyph, uv, gx, gy).rg * inside * fade;
 }
 void main() {
   if (uPass > 0.5) { o = vec4(vId, 1.0); return; }
@@ -139,9 +134,10 @@ void main() {
   if (vState > 0.5 && vState < 1.5) { col = mix(col, vec3(1.0, 0.72, 0.15), 0.3 + 0.22 * pulse); col = mix(col, vec3(0.42, 0.26, 0.0), line * 0.6); }
   if (vState > 1.5) { col = mix(col, vec3(1.0, 0.31, 0.58), 0.38 + 0.2 * pulse); }
   if (abs(vIdx - uHover) < 0.5) col = mix(col, vec3(1.0), 0.3);
-  float tm = faceText(normalize(vN));
-  col = mix(col, vec3(0.07, 0.10, 0.17), tm);
-  if (a < 0.999 && a > 0.2) a = max(a, tm * 0.9);        // 반투명(속 보기)일 때도 번호는 또렷하게
+  vec2 tm = faceText(normalize(vN));
+  col = mix(col, vec3(1.0), tm.y * 0.92);                 // 흰 테두리 → 글자 순서로 칠함
+  col = mix(col, vec3(0.07, 0.10, 0.17), tm.x);
+  if (a < 0.999 && a > 0.2) a = max(a, max(tm.x, tm.y * 0.9) * 0.9);        // 반투명(속 보기)일 때도 번호는 또렷하게
   if (a < 0.999) a = max(a, line * 0.6);
   o = vec4(col, a);
 }`
@@ -303,20 +299,21 @@ export function createRenderer(canvas) {
   }
   /** 번호에 쓰인 글자가 글자판에 모두 있게 함 (없는 글자가 생기면 글자판을 다시 만듦) */
   function ensureGlyphs(meta) {
-    const need = new Set(['?']); for (const m of meta) for (const ch of [...String(m.number ?? '')].slice(0, TXT_MAX)) need.add(ch)
+    const need = new Set(['?']); for (const m of meta) for (const ch of labelChars(m.number)) need.add(ch)
     if (S.glyph && [...need].every(c => S.glyph.map.has(c))) return
-    const chars = [...new Set([...(S.glyph ? S.glyph.map.keys() : []), ...need])].slice(0, G_MAX), { cv, rows } = buildAtlas(chars)
+    const chars = [...new Set([...(S.glyph ? S.glyph.map.keys() : []), ...need])].slice(0, TXT.MAX), at = buildGlyphMasks(chars)
     if (S.glyph) gl.deleteTexture(S.glyph.tex)
-    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, cv); gl.generateMipmap(gl.TEXTURE_2D)
+    const tex = gl.createTexture(); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, at.w, at.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, at.data); gl.generateMipmap(gl.TEXTURE_2D)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    S.glyph = { tex, rows, map: new Map(chars.map((c, i) => [c, i])) }
+    const an = gl.getExtension('EXT_texture_filter_anisotropic'); if (an) gl.texParameterf(gl.TEXTURE_2D, an.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(an.MAX_TEXTURE_MAX_ANISOTROPY_EXT)))   // 비스듬히 볼 때도 글자가 선명하게
+    S.glyph = { tex, rows: at.rows, map: new Map(chars.map((c, i) => [c, i])) }
   }
   /** 글자판을 3번 자리에 붙임 — 박스 판별용 임시 그림판(0번 자리를 씀)과 같은 텍스처를 읽고 쓰는 일이 없게 항상 전용 자리를 씀 */
   function bindGlyph() {
     if (!S.glyph) return
-    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, S.glyph.tex); gl.uniform1i(boxP.u.uGlyph, 3); gl.uniform2f(boxP.u.uGlyphGrid, G_COLS, S.glyph.rows); gl.activeTexture(gl.TEXTURE0)
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, S.glyph.tex); gl.uniform1i(boxP.u.uGlyph, 3); gl.uniform2f(boxP.u.uGlyphGrid, TXT.COLS, S.glyph.rows); gl.activeTexture(gl.TEXTURE0)
   }
   function setBoxes(model, o) {
     const inst = buildInstances(model, o); S.inst = inst
@@ -324,8 +321,8 @@ export function createRenderer(canvas) {
     const n = inst.meta.length, packed = new Float32Array(Math.max(1, n) * STRIDE).fill(-1), q = S.glyph.map.get('?')
     inst.meta.forEach((m, i) => {
       packed.set(inst.f32.subarray(i * INST_FLOATS, (i + 1) * INST_FLOATS), i * STRIDE)
-      const cs = [...String(m.number ?? '')].slice(0, TXT_MAX)
-      for (let k = 0; k < TXT_MAX; k++) packed[i * STRIDE + INST_FLOATS + k] = k < cs.length ? (S.glyph.map.get(cs[k]) ?? q) : -1
+      const cs = labelChars(m.number)
+      for (let k = 0; k < TXT.CHARS; k++) packed[i * STRIDE + INST_FLOATS + k] = k < cs.length ? (S.glyph.map.get(cs[k]) ?? q) : -1
     })
     gl.bindBuffer(gl.ARRAY_BUFFER, instB); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW)
     if (S.vaoSolid) { gl.deleteVertexArray(S.vaoSolid); gl.deleteVertexArray(S.vaoGhost) }
@@ -362,7 +359,7 @@ export function createRenderer(canvas) {
     const { vp } = viewProjection(a.cam, a.aspect), { eye, fwd } = basisOf(a.cam), sec = a.sec, dpr = S.dpr || 1, gc = a.gridColor || [1, 1, 1]
     gl.useProgram(lineP.p); gl.uniformMatrix4fv(lineP.u.uVP, false, new Float32Array(vp)); gl.uniform3fv(lineP.u.uEye, eye); gl.uniform3fv(lineP.u.uFwd, fwd)
     gl.uniform1f(lineP.u.uSecOn, sec && sec.on ? 1 : 0); gl.uniform1f(lineP.u.uSecDist, sec ? sec.dist : 0)
-    gl.uniform2f(lineP.u.uView, canvas.width, canvas.height); gl.uniform1f(lineP.u.uPx, 2 * dpr); gl.uniform1f(lineP.u.uDash, 4 * dpr); gl.uniform3f(lineP.u.uColor, gc[0], gc[1], gc[2])
+    gl.uniform2f(lineP.u.uView, canvas.width, canvas.height); gl.uniform1f(lineP.u.uPx, 4 * dpr); gl.uniform1f(lineP.u.uDash, 4 * dpr); gl.uniform3f(lineP.u.uColor, gc[0], gc[1], gc[2])
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE)
     gl.bindVertexArray(linkVao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, S.nLinks); gl.bindVertexArray(null)
     gl.enable(gl.CULL_FACE); gl.depthMask(true); gl.disable(gl.BLEND)

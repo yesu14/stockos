@@ -38,6 +38,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
   const [spread, setSpread] = useState(SPREAD_DEFAULT)   // 박스 간격 (0 = 붙임 ~ 1 = 아주 넓게)
   const [maxTier, setMaxTier] = useState(0)              // 층 보기: 0 = 전체, n = n층까지만
   const [xray, setXray] = useState(false)                // 속 보기 (박스를 반투명하게)
+  const [links, setLinks] = useState(true)                // 층 연결 점선 (위층 박스를 바로 아래 박스와 이어서 보여줌)
   const [panMode, setPanMode] = useState(false)          // ✋ 이동 모드: 왼쪽 끌기/한 손가락으로도 이동 (오른쪽 버튼이 없는 터치 화면용)
   const [panel, setPanel] = useState(false)
   const [lowDetail, setLowDetail] = useState(false)       // 박스가 너무 작아서 번호표를 생략한 상태
@@ -46,7 +47,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
   const cam = useRef(null), scene = useRef(null), dirty = useRef(true), tween = useRef(null), pal = useRef(DARK_PALETTE)
   const lowRef = useRef(false), pointers = useRef(new Map()), gesture = useRef(null), camKey = useRef(null), lastDraw = useRef(0)
   const prevSize = useRef(null), rescale = useRef(false), firstFull = useRef(true)
-  const latest = useRef({}); latest.current = { model, highlight, focus, activeZoneId, size, numbers, spread, maxTier, xray }
+  const latest = useRef({}); latest.current = { model, highlight, focus, activeZoneId, size, numbers, spread, maxTier, xray, links }
   const dpr = typeof window !== 'undefined' ? Math.min(2.5, window.devicePixelRatio || 1) : 1
 
   const tweenTo = useCallback((to, ms = 420) => {
@@ -81,7 +82,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
     cam.current = { ...c, scale: clamp(c.scale * r, SCALE_MIN, SCALE_MAX), panX: c.panX * r, panY: c.panY * r }; dirty.current = true
   }, [size.w, size.h])
   // 데이터/강조가 바뀌면 다시 그리기
-  useEffect(() => { dirty.current = true }, [model, highlight, focus?.boxId, activeZoneId, numbers, spread, maxTier, xray])
+  useEffect(() => { dirty.current = true }, [model, highlight, focus?.boxId, activeZoneId, numbers, spread, maxTier, xray, links])
   // 검색 결과를 누르면 그 박스/구역으로 이동
   useEffect(() => {
     if (!focus || !cam.current || size.w < 60) return
@@ -110,7 +111,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
       if (!cvs || !cam.current || !L.model.warehouse) return
       dirty.current = false; lastDraw.current = t
       const ctx = cvs.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      scene.current = buildScene(L.model, cam.current, L.size, { palette: pal.current, highlight: L.highlight, focusId: L.focus?.boxId || null, activeZoneId: L.activeZoneId, allNumbers: L.numbers, spread: L.spread, maxTier: L.maxTier, xray: L.xray })
+      scene.current = buildScene(L.model, cam.current, L.size, { palette: pal.current, highlight: L.highlight, focusId: L.focus?.boxId || null, activeZoneId: L.activeZoneId, allNumbers: L.numbers, spread: L.spread, maxTier: L.maxTier, xray: L.xray, links: L.links })
       drawScene(ctx, scene.current, L.size, { pulse: 0.5 + 0.5 * Math.sin(t / 230) })
       const low = !!(L.numbers && scene.current.stats?.lod); if (low !== lowRef.current) { lowRef.current = low; setLowDetail(low) }
     }
@@ -245,6 +246,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={numbers} onChange={e => setNumbers(e.target.checked)} /> 번호표 모두 보기 <span className="text-surface-500">(가려진 박스도)</span></label>
             <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={xray} onChange={e => setXray(e.target.checked)} /> 속 보기 <span className="text-surface-500">(반투명하게)</span></label>
+            <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={links} onChange={e => setLinks(e.target.checked)} /> 층 연결 점선 <span className="text-surface-500">(위층 박스를 바로 아래 박스와 이어 보여요)</span></label>
           </div>
           <p className="text-[10px] text-surface-500 leading-relaxed">3D 화면을 한 번 누른 뒤: 방향키 / W A S D = 이동 · Q E = 돌리기 · + − = 확대 (Shift 를 같이 누르면 크게)</p>
         </div>)}

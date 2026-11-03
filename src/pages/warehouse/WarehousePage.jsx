@@ -25,7 +25,7 @@ const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
 // 새 3D(WebGL2)를 쓸 수 있는 기기인지 (안 되면 예전 3D 로)
 const glSupported = (() => { try { const c = document.createElement('canvas'), g = c.getContext('webgl2'); const ok = !!g; g?.getExtension('WEBGL_lose_context')?.loseContext(); return ok } catch { return false } })()
-const WH_VERSION = 'v46'
+const WH_VERSION = 'v47'
 // 3D 방식: 주소에 ?3d=gl / three / classic 이 있으면 그걸 우선, 아니면 마지막에 고른 방식(기억해 둔 것)
 const load3d = () => {
   try { const q = new URLSearchParams(window.location.search).get('3d'); if (q === 'gl' || q === 'three' || q === 'classic') return q } catch { /* 무시 */ }
@@ -232,7 +232,7 @@ export default function WarehousePage() {
                   <button type="button" className="shrink-0 px-1 text-amber-300/80 hover:text-amber-200" aria-label="안내 닫기" onClick={() => setFallbackNote('')}>✕</button>
                 </div>)}
               {view3d !== 'classic' && glSupported
-                ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
+                ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} onNote={setFallbackNote} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                     onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
                     onFail={failed3d} />
                 : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}

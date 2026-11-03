@@ -37,13 +37,13 @@ function presetCam(kind, model, aspect, spread) {
   return kind === 'front' ? { ...d, yaw: Math.PI / 2, pitch: 0.2 } : { ...d, yaw: 0, pitch: 0.2 }
 }
 
-export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine }) {
+export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine, onNote }) {
   const wh = model.warehouse
   const { ref: frameRef, full, toggle } = useFullscreen()
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [spread, setSpread] = useState(SPREAD_DEFAULT), [maxTier, setMaxTier] = useState(0), [xray, setXray] = useState(false), [links, setLinks] = useState(true)
-  const [sec, setSec] = useState(0), [numMode, setNumMode] = useState(engine === 'three' ? 'all' : 'auto'), [panMode, setPanMode] = useState(false), [panel, setPanel] = useState(false)
+  const [sec, setSec] = useState(0), [numMode, setNumMode] = useState('auto'), [panMode, setPanMode] = useState(false), [panel, setPanel] = useState(false)
   const [lowDetail, setLowDetail] = useState(false), [error, setError] = useState(''), [themeKey, setThemeKey] = useState(0), [ready, setReady] = useState(0)
   const framing = useRef('home')                       // 처음/위에서/앞에서/옆에서 중 지금 보는 방식 (직접 움직이면 null → 화면 크기가 바뀌어도 그대로 둠)
   const R = useRef(null), cam = useRef(null), camKey = useRef(null), tween = useRef(null), dirty = useRef(true), visDirty = useRef(true), moveUntil = useRef(0), lastDraw = useRef(0)
@@ -90,7 +90,9 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
   }, [])
   // 데이터가 바뀌면 장면 다시 만들기
   useEffect(() => { const r = R.current; if (!r || !wh) return; r.setEnv(model, spread, theme.pal, activeZoneId); dirty.current = true }, [model, spread, activeZoneId, theme, wh?.width, wh?.height, ready]) // eslint-disable-line
-  useEffect(() => { const r = R.current; if (!r || !wh) return; r.setBoxes(model, { spread, maxTier, highlight, focusId: focus?.boxId || null, xray }); dirty.current = visDirty.current = true }, [model, spread, maxTier, highlight, focus?.boxId, xray, wh?.id, ready]) // eslint-disable-line
+  useEffect(() => { const r = R.current; if (!r || !wh) return; r.setBoxes(model, { spread, maxTier, highlight, focusId: focus?.boxId || null, xray })
+    if (r.featureError && onNote) onNote(`Three.js 에서 박스 번호/층 점선을 만들지 못해서 그 기능만 껐어요 (박스 그리기는 그대로예요). 이유: ${String(r.featureError).replace(/\s+/g, ' ').slice(0, 120)}`)
+    dirty.current = visDirty.current = true }, [model, spread, maxTier, highlight, focus?.boxId, xray, wh?.id, ready]) // eslint-disable-line
   // 처음 / 창고 크기가 바뀌면 카메라를 꼭 맞게 (보던 각도는 유지)
   useEffect(() => {
     if (!wh || size.w < 60) return
@@ -261,7 +263,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
       }
       const low = !moving && Lc.numMode !== 'off' && vis.current.length > 0 && shown.length === 0 && tagsShown.length === 0 && faces.length === 0 && maxPx < (ft ? FACE_MIN_AREA : NUM_MIN_AREA)
       if (low !== lowRef.current) { lowRef.current = low; setLowDetail(low) }
-      ov.dataset.labels = shown.join(','); ov.dataset.tags = tagsShown.join(','); ov.dataset.faces = faces.join(','); ov.dataset.links = String(Lc.links ? (r.linkCount || 0) : 0); ov.dataset.visible = String(vis.current.length); ov.dataset.hover = hv.index >= 0 && meta[hv.index] ? meta[hv.index].number : ''
+      ov.dataset.labels = shown.join(','); ov.dataset.tags = tagsShown.join(','); ov.dataset.faces = faces.join(','); ov.dataset.links = String(Lc.links ? (r.linkCount || 0) : 0); ov.dataset.featureError = r.featureError || ''; ov.dataset.visible = String(vis.current.length); ov.dataset.hover = hv.index >= 0 && meta[hv.index] ? meta[hv.index].number : ''
     }
     const loop = t => {
       raf = requestAnimationFrame(loop)
@@ -348,7 +350,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
             <div className="flex flex-wrap gap-1">{[['auto', '박스 면에만'], ['all', '가려진 박스도'], ['off', '끄기']].map(([k, label]) => <button key={k} type="button" onClick={() => setNumMode(k)} className={chip(numMode === k)}>{label}</button>)}</div>
           </div>
           <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={xray} onChange={e => setXray(e.target.checked)} /> 반투명으로 보기 <span className="text-surface-500">(모든 박스가 비쳐 보여요)</span></label>
-          {engine !== 'three' && <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={links} onChange={e => setLinks(e.target.checked)} /> 층 연결 점선 <span className="text-surface-500">(위층 박스를 바로 아래 박스와 점선으로 이어 보여요)</span></label>}
+          <label className="flex items-center gap-2 text-[11px] text-surface-200 cursor-pointer"><input type="checkbox" checked={links} onChange={e => setLinks(e.target.checked)} /> 층 연결 점선 <span className="text-surface-500">(위층 박스를 바로 아래 박스와 점선으로 이어 보여요)</span></label>
           <p className="text-[10px] text-surface-500 leading-relaxed">3D 화면을 한 번 누른 뒤: 방향키 / W A S D = 이동 · Q E = 돌리기 · + − = 확대 (Shift 를 같이 누르면 크게)</p>
         </div>)}
     </div>

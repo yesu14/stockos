@@ -3,6 +3,7 @@
 //  직교 투영 + 화가 알고리즘(먼 것부터 그리기). 캔버스로 그리고, 같은 장면을 SVG 로도 뽑을 수 있음(테스트용).
 //  좌표: x → 오른쪽, y → 아래(평면도와 동일), z → 위
 // ═══════════════════════════════════════════════════════════
+import { TXT, FACES as FT_FACES, faceLayout, labelChars, GLYPH_FONT } from './faceText'
 import { shade as shadeRaw, rgba as rgbaRaw, fixtureLen, clamp, officeRect } from './whLogic'
 
 const _c = new Map()
@@ -18,13 +19,13 @@ export const DARK_PALETTE = {
   bg: '#141826', floor: '#39435f', floorEdge: '#7f8cb0', grid: 'rgba(255,255,255,0.07)',
   wall: '#8d99b8', wallRim: '#c2cbe0', window: '#bfe6ff', windowEdge: '#6db3e0',
   door: '#d9a273', doorEdge: '#9b6b3e', office: '#d8c6ff', officeRoof: '#a98cf0',
-  pillBg: 'rgba(255,255,255,0.93)', pillText: '#334155', boxText: '#2b3445',
+  pillBg: 'rgba(255,255,255,0.93)', pillText: '#334155', boxText: '#2b3445', link: 'rgba(255,255,255,0.9)', linkCase: 'rgba(8,12,24,0.6)',
 }
 export const LIGHT_PALETTE = {
   bg: '#ffffff', floor: '#eef2f9', floorEdge: '#a5b1c9', grid: 'rgba(15,23,42,0.07)',
   wall: '#cfd8e8', wallRim: '#e8edf6', window: '#bfe6ff', windowEdge: '#6db3e0',
   door: '#d9a273', doorEdge: '#9b6b3e', office: '#d8c6ff', officeRoof: '#a98cf0',
-  pillBg: 'rgba(255,255,255,0.96)', pillText: '#334155', boxText: '#2b3445',
+  pillBg: 'rgba(255,255,255,0.96)', pillText: '#334155', boxText: '#2b3445', link: 'rgba(30,41,70,0.85)', linkCase: 'rgba(255,255,255,0.75)',
 }
 
 // ── 기하 ────────────────────────────────────────────────────
@@ -140,6 +141,18 @@ function separateLabels(labels) {
 //  장면 만들기
 //  opts: { palette, highlight:Set(박스id), focusId, activeZoneId }
 // ═══════════════════════════════════════════════════════════
+/** 박스 한 면(바깥 방향 n)의 한가운데에 쓸 번호를 면의 기울기에 맞춰 비스듬히 그릴 수 있게, 글자 칸(local 픽셀) → 화면 변환 행렬을 만듦.
+ *  규칙(크기·방향·간격)은 기본 3D · Three.js 와 같은 faceText.js. 글자가 너무 작게 보이면 null */
+function faceTextItem(P, bm, n, cs, alpha) {
+  const L = faceLayout(bm, n, cs.length), c = L.center, h = L.th / 2, CH = TXT.CH
+  const at = (u, v) => P.p(c[0] + L.tx[0] * u + L.ty[0] * v, c[1] + L.tx[1] * u + L.ty[1] * v, c[2] + L.tx[2] * u + L.ty[2] * v)
+  const o = at(0, 0), rr = at(h, 0), ll = at(-h, 0), up = at(0, h), dn = at(0, -h)
+  const ax = (rr[0] - ll[0]) / CH, ay = (rr[1] - ll[1]) / CH, bx = (dn[0] - up[0]) / CH, by = (dn[1] - up[1]) / CH          // 글자 칸의 가로(→) · 세로(↓) 한 칸이 화면에서 가리키는 방향
+  const hpx = Math.hypot(bx, by) * CH, capPx = hpx * TXT.CAP
+  if (capPx < 5) return null
+  return { k: 'ftext', m: [ax, ay, bx, by, o[0], o[1]], cs, capPx, wpx: cs.length * TXT.CA * hpx, cx: o[0], cy: o[1], alpha: alpha * Math.min(1, (capPx - 5) / 4) }
+}
+
 export function buildScene(model, cam, vp, opts = {}) {
   const wh = model.warehouse
   /** @type {any[]} */
@@ -244,17 +257,23 @@ export function buildScene(model, cam, vp, opts = {}) {
         const st = maxTier ? all.filter(b => b.tier <= maxTier) : all          // 층 자르기: n층까지만 보이게
         if (!st.length) continue
         const x0 = z.x + (s - 1) * z.cw + mx, x1 = z.x + s * z.cw - mx, y0 = z.y + li * z.ch + my, y1 = z.y + (li + 1) * z.ch - my
+        let prev = null
         for (let k = 0; k < st.length; k++) {
           const b = st[k], tier = b.tier
           const z0 = (tier - 1) * G.pz, z1 = z0 + G.boxH
           const c = cuboid(P, x0, x1, y0, y1, z0, z1)
           const isHl = hl && hl.has(b.id), isFocus = opts.focusId === b.id
           const alpha = (hl && !isHl ? 0.28 : 1) * (opts.xray && (isHl || isFocus) ? 2.2 : xa)
+          if (prev && opts.links !== false) {                // 층 연결 점선: 아래 박스 윗면 ↔ 이 박스 아랫면 사이 빈 공간 (이 박스를 그리기 전에 그려서, 앞쪽 박스가 가리면 가려짐)
+            const la = Math.max(prev.alpha, alpha)
+            if (z0 - prev.z1 > Math.min(z.cw, z.ch) * 0.06 && la >= 0.4) { const a0 = P.p((x0 + x1) / 2, (y0 + y1) / 2, prev.z1), a1 = P.p((x0 + x1) / 2, (y0 + y1) / 2, z0); items.push({ k: 'line', pts: [a0[0], a0[1], a1[0], a1[1]], stroke: pal.link, casing: pal.linkCase, lw: 1.8, dash: [4, 4], alpha: 0.35 + 0.55 * Math.min(1, la), link: true, from: prev.id, to: b.id }) }
+          }
+          prev = { z1, alpha, id: b.id }
           const hit = { type: 'box', id: b.id }
           const stroke = isFocus ? '#ff4f93' : isHl ? '#f59e0b' : shade(z.color, 0.55)
           const lw = isFocus ? 3 : isHl ? 2.4 : 1
           const topHidden = st[k + 1]?.tier === tier + 1 && G.pz - G.boxH < 1e-6
-          const sides = []; let topFace = null
+          let topFace = null
           for (const f of FACES) {                       // 카메라 쪽을 보는 면은 모두 그림 (옆 박스와 붙어 있어도 투명하게 비지 않음)
             if (!eyeSees(f.n, e)) continue
             const pts = f.idx.map(i => c[i]), fl = flat(pts)
@@ -265,22 +284,16 @@ export function buildScene(model, cam, vp, opts = {}) {
                 const ym = (y0 + y1) / 2, dy = (y1 - y0) * 0.11, zt = z1 + 0.002
                 poly([P.p(x0, ym - dy, zt), P.p(x1, ym - dy, zt), P.p(x1, ym + dy, zt), P.p(x0, ym + dy, zt)], 'rgba(255,255,255,0.55)', null, 0, { alpha: Math.min(1, alpha), hit })
               }
-            } else sides.push({ a: area(fl), fl })
+            }
           }
           const num = String(b.box_number); nBoxes++
-          // 번호 라벨: 가장 잘 보이는 옆면에, 다른 옆면도 충분히 크면 거기에도. 옆면이 너무 작으면(위에서 본 경우) 맨 위 박스의 윗면
-          sides.sort((p, q) => q.a - p.a)
-          const put = face => {
-            const [cx, cy] = centroid(face.fl), ch = Math.sqrt(face.a)
-            const size = Math.max(7, Math.min(18, ch * 0.4, (ch * 0.92) / Math.max(1.6, textW(num, 1))))
-            if (size < 7) return null
-            items.push({ k: 'text', x: cx, y: cy, text: num, size, color: pal.boxText, bold: true, alpha: Math.min(1, alpha) })
-            return { idx: items.length - 1, cx, cy, w: textW(num, size), h: size }
+          // 번호: 카메라 쪽을 보는 모든 면의 한가운데에, 면의 기울기에 맞춰 비스듬히 씀 (기본 3D · Three.js 와 같은 규칙)
+          let rec = null; const cs = labelChars(num), bm = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, cz: (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0 }
+          if (cs.length) for (const fn of FT_FACES) {
+            if (!eyeSees(fn, e)) continue
+            const it = faceTextItem(P, bm, fn, cs, Math.min(1, alpha)); if (!it) continue
+            it.id = b.id; items.push(it); if (!rec || it.capPx > rec.h) rec = { idx: items.length - 1, cx: it.cx, cy: it.cy, w: it.wpx, h: it.capPx }
           }
-          let rec = null
-          if (sides[0] && sides[0].a > 260) rec = put(sides[0])
-          else if (topFace && !topHidden) { const a = area(topFace); if (a > 300) rec = put({ a, fl: topFace }) }
-          if (sides[1] && sides[1].a > 520) put(sides[1])
           if (opts.allNumbers) {                         // 번호표 후보: 자기 면에서 읽히면 필요 없고, 가려졌거나 면이 너무 작은 박스에만 띄움
             const cp = P.p((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2)
             tagCands.push({ id: b.id, text: num, x: cp[0], y: cp[1], d: cp[2], hl: isHl || isFocus, alpha: hl && !isHl ? 0.35 : 1, rec, occ: 0, pitch: Math.min(z.cw, z.ch) * cam.scale })
@@ -390,7 +403,17 @@ export function drawScene(ctx, scene, vp, opts = {}) {
       }
     } else if (it.k === 'line') {
       ctx.beginPath(); ctx.moveTo(it.pts[0], it.pts[1]); ctx.lineTo(it.pts[2], it.pts[3])
-      ctx.strokeStyle = it.stroke; ctx.lineWidth = it.lw; ctx.stroke()
+      if (it.dash) ctx.setLineDash(it.dash)
+      if (it.casing) { ctx.strokeStyle = it.casing; ctx.lineWidth = it.lw + 2.4; ctx.stroke() }          // 점선 바깥 테두리 (밝은 면 위에서도 보이게)
+      ctx.strokeStyle = it.stroke; ctx.lineWidth = it.lw; ctx.stroke(); if (it.dash) ctx.setLineDash([])
+    } else if (it.k === 'ftext') {                  // 면 위의 번호: 면의 기울기대로 기울여 그림 (흰 테두리 → 글자 순서)
+      const CH = TXT.CH, adv = TXT.CA * CH, base = (TXT.BASE - 0.5) * CH, lim = TXT.CW * TXT.SQ - CH * 0.1, ink = `rgb(${TXT.INK.join(',')})`
+      ctx.save(); ctx.transform(it.m[0], it.m[1], it.m[2], it.m[3], it.m[4], it.m[5]); ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.font = `900 ${Math.round(CH * 0.66)}px ${GLYPH_FONT}`
+      it.cs.forEach((ch, i) => {
+        const w = ctx.measureText(ch).width; ctx.save(); ctx.translate((i - (it.cs.length - 1) / 2) * adv, base); ctx.scale(w > lim ? lim / w : 1, 1)
+        ctx.lineWidth = CH * 0.105; ctx.strokeStyle = '#ffffff'; ctx.strokeText(ch, 0, 0); ctx.fillStyle = ink; ctx.fillText(ch, 0, 0); ctx.lineWidth = CH * 0.03; ctx.strokeStyle = ink; ctx.strokeText(ch, 0, 0); ctx.restore()
+      })
+      ctx.restore()
     } else if (it.k === 'dot') {
       ctx.beginPath(); ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2); ctx.fillStyle = it.fill; ctx.fill()
     } else if (it.k === 'text') {
@@ -422,7 +445,8 @@ export function sceneToSvg(scene, vp, bg) {
     if (it.k === 'poly') {
       const p = []; for (let i = 0; i < it.pts.length; i += 2) p.push(`${it.pts[i].toFixed(1)},${it.pts[i + 1].toFixed(1)}`)
       o.push(`<polygon points="${p.join(' ')}" fill="${it.fill}"${it.stroke && it.lw ? ` stroke="${it.stroke}" stroke-width="${it.lw}" stroke-linejoin="round"` : ''}${a}/>`)
-    } else if (it.k === 'line') o.push(`<line x1="${it.pts[0]}" y1="${it.pts[1]}" x2="${it.pts[2]}" y2="${it.pts[3]}" stroke="${it.stroke}" stroke-width="${it.lw}"/>`)
+    } else if (it.k === 'line') o.push(`<line x1="${it.pts[0]}" y1="${it.pts[1]}" x2="${it.pts[2]}" y2="${it.pts[3]}" stroke="${it.stroke}" stroke-width="${it.lw}"${it.dash ? ` stroke-dasharray="${it.dash.join(' ')}"` : ''}${a}/>`)
+    else if (it.k === 'ftext') { const CH = TXT.CH, adv = TXT.CA * CH; o.push(`<g transform="matrix(${it.m.join(' ')})"${a}>${it.cs.map((ch, i) => `<text x="${((i - (it.cs.length - 1) / 2) * adv).toFixed(2)}" y="${((TXT.BASE - 0.5) * CH).toFixed(2)}" font-size="${Math.round(CH * 0.66)}" font-weight="900" text-anchor="middle" font-family="sans-serif" stroke="#fff" stroke-width="${(CH * 0.105).toFixed(1)}" fill="rgb(${TXT.INK.join(',')})" paint-order="stroke">${esc(ch)}</text>`).join('')}</g>`) }
     else if (it.k === 'dot') o.push(`<circle cx="${it.x}" cy="${it.y}" r="${it.r}" fill="${it.fill}"/>`)
     else if (it.k === 'text') o.push(`<text x="${it.x}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif"${a}>${esc(it.text)}</text>`)
     else if (it.k === 'tag') o.push(`${it.lead ? `<line x1="${it.lead[0]}" y1="${it.lead[1]}" x2="${it.x}" y2="${it.y}" stroke="rgba(255,255,255,0.55)" stroke-width="1.2"/>` : ''}<rect x="${it.x - it.w / 2}" y="${it.y - it.h / 2}" width="${it.w}" height="${it.h}" rx="${it.h / 2}" fill="${it.fill}" stroke="${it.hl ? '#f59e0b' : 'rgba(0,0,0,0.28)'}"${a}/><text x="${it.x}" y="${it.y}" font-size="${it.size}" font-weight="700" fill="${it.color}" text-anchor="middle" dominant-baseline="central" font-family="sans-serif"${a}>${esc(it.text)}</text>`)
