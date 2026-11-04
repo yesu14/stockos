@@ -28,7 +28,7 @@ function lerpCam(a, b, e) {
 }
 const TWO_PI = Math.PI * 2
 
-export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onEngine, full = false, onToggleFull, onSwitchFull }) {
+export default function Scene3D({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onEngine, full = false, onToggleFull, onSwitchFull, switchLabel }) {
   const wh = model.warehouse
   const toggle = () => onToggleFull && onToggleFull()          // 전체화면 틀은 페이지가 가짐
   const boxRef = useRef(null), canvasRef = useRef(null)
@@ -199,7 +199,7 @@ export default function Scene3D({ model, highlight, focus, activeZoneId, onPickB
         <span className="text-lg">🧊</span><h2 className="font-bold text-white text-sm">3D 창고 <span className="text-[10px] font-normal text-surface-400">(예전 방식)</span></h2>
         <div className="flex-1" />
         {onEngine ? <ViewPicker value="classic" onChange={onEngine} /> : <span className="text-[10px] text-surface-500">이 기기에서는 새 3D 를 쓸 수 없어요</span>}
-        {full && onSwitchFull && <Btn size="sm" variant="soft" onClick={onSwitchFull} title="평면도 전체화면으로 바꾸기">🗺️ 평면도 전체화면</Btn>}
+        {full && onSwitchFull && <Btn size="sm" variant="soft" onClick={onSwitchFull} title={`${(switchLabel || '🗺️ 평면도 전체화면').replace(/^\S+\s/, '')}으로 바꾸기`}>{switchLabel || '🗺️ 평면도 전체화면'}</Btn>}
         {full && <Btn size="sm" variant="soft" onClick={toggle}>닫기 ✕</Btn>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown} className={`relative rounded-[28px] overflow-hidden border border-surface-700 touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 ${full ? 'flex-1 min-h-0' : 'h-[300px] sm:h-[340px]'}`}

@@ -300,6 +300,96 @@ export function planBoxMove(model, boxId, target) {
   }
   return { ok: true, same: sameStack, fromTier: box.tier, toTier, falls: above.length, steps, target: { zoneName: zone.name, lineNo: line.no, slot } }
 }
+// ═══════════════════════════════════════════════════════════
+//  전체보기 격자 + 위치 바꾸기 (층 지정 / 서로 바꾸기 / 되돌리기)
+//  모든 계획은 "단계 목록(steps)" — DB 의 "같은 자리에 박스 두 개 금지" 규칙을 어기지 않는 순서로 하나씩 실행
+// ═══════════════════════════════════════════════════════════
+
+/** 전체보기용 격자: 구역 → 줄 → 층(위→아래) × 칸.
+ *  kind: 'box' = 박스가 있음 / 'next' = 이 칸 맨 위에 새로 놓을 수 있는 빈 자리 / 'void' = 그 위의 빈 공간 (놓을 수 없음) */
+export function buildRacks(model, zoneId = null) {
+  return model.zones.filter(z => !zoneId || z.id === zoneId).map(zone => ({
+    zone,
+    lines: zone.lines.map(line => {
+      const stacks = Array.from({ length: line.slot_count }, (_, k) => stackAt(line, k + 1))
+      const tops = stacks.map(st => st.reduce((m, b) => Math.max(m, b.tier), 0)), rowsN = Math.min(zone.tiers, Math.max(1, Math.max(0, ...tops) + 1))
+      const rows = Array.from({ length: rowsN }, (_, i) => {
+        const tier = rowsN - i
+        return { tier, cells: stacks.map((st, k) => { const box = st.find(b => b.tier === tier) || null; return { slot: k + 1, tier, box, kind: box ? 'box' : tier === tops[k] + 1 && tier <= zone.tiers ? 'next' : 'void' } }) }
+      })
+      return { line, rows, boxCount: stacks.reduce((a, st) => a + st.length, 0) }
+    }),
+  }))
+}
+
+const atPos = (b, p) => b && b.zone_id === p.zone_id && b.line_id === p.line_id && b.slot_no === p.slot_no && b.tier === p.tier
+const posOf = b => ({ zone_id: b.zone_id, line_id: b.line_id, slot_no: b.slot_no, tier: b.tier })
+
+/** 박스를 정확한 자리에 놓기.  target: { zoneId, lineId, slot, tier? }
+ *  mode 'insert' : tier 에 끼워 넣음 (원래 그 자리의 박스와 그 위 박스들은 한 층씩 올라감). tier 를 안 주면 칸 맨 위.
+ *                  원래 자리에서 그 위에 있던 박스는 한 층씩 내려옴 (공중에 뜬 박스가 생기지 않게)
+ *  mode 'swap'   : tier 자리에 있는 박스와 서로 자리를 바꿈 (둘 다 그대로 쌓여 있음) */
+export function planPlace(model, boxId, target, mode = 'insert') {
+  const no = (reason, text) => ({ ok: false, reason, text })
+  const box = model.boxesById.get(boxId); if (!box) return no('no-box', '박스를 찾을 수 없어요')
+  const zone = model.zonesById.get(target.zoneId), line = model.linesById.get(target.lineId)
+  if (!zone || !line || line.zone_id !== zone.id) return no('no-target', '놓을 자리를 찾을 수 없어요')
+  const slot = target.slot; if (!(slot >= 1 && slot <= line.slot_count)) return no('no-slot', '그 칸은 없어요')
+  const srcStack = stackAt(model.linesById.get(box.line_id), box.slot_no), tStack = stackAt(line, slot), sameStack = box.line_id === line.id && box.slot_no === slot
+  const where = (z, l, s, t) => `${z.name} ${l.no}번째 줄 ${s}번째 칸 ${t}층`, before = posOf(box), from = locationText(box)
+  if (mode === 'swap') {
+    const other = tStack.find(b => b.tier === target.tier)
+    if (!other) return no('no-occupant', '그 자리에는 바꿀 박스가 없어요')
+    if (other.id === box.id) return no('same', '자기 자신과는 바꿀 수 없어요')
+    const steps = [                                                                                        // A 를 잠깐 치워 두고 → B 를 A 자리로 → A 를 B 자리로 (매 단계마다 비어 있는 자리로만 움직임)
+      { id: box.id, patch: { tier: srcStack.length + 100 } },
+      { id: other.id, patch: { zone_id: box.zone_id, line_id: box.line_id, slot_no: box.slot_no, tier: box.tier } },
+      { id: box.id, patch: { zone_id: other.zone_id, line_id: other.line_id, slot_no: other.slot_no, tier: other.tier } },
+    ]
+    const aNow = posOf(other), bNow = before
+    return { ok: true, mode: 'swap', same: sameStack, steps, swapWith: other, fromTier: box.tier, toTier: other.tier, rises: 0, falls: 0,
+      target: { zoneName: zone.name, lineNo: line.no, slot },
+      text: `박스 ${box.box_number}(${from}) 와 박스 ${other.box_number}(${locationText(other)}) 가 자리를 서로 바꿔요. 다른 박스는 그대로예요.`,
+      done: `박스 ${box.box_number} ↔ 박스 ${other.box_number} 자리를 서로 바꿨어요`,
+      undo: { kind: 'swap', a: box.id, b: other.id, aNow, bNow, label: `박스 ${box.box_number} ↔ ${other.box_number}` } }
+  }
+  const top = tStack.length, t = target.tier ?? (sameStack ? top : top + 1)
+  let steps = [], rises = 0, falls = 0
+  if (sameStack) {
+    if (!(t >= 1 && t <= top)) return no('bad-tier', '그 층은 없어요')
+    if (t === box.tier) return no('same', t === top && target.tier == null ? '이미 그 칸의 맨 위에 있어요' : '이미 그 자리에 있어요')
+    const p = box.tier; steps.push({ id: box.id, patch: { tier: srcStack.length + 100 } })
+    if (t < p) { for (const b of srcStack.filter(b => b.tier >= t && b.tier < p).sort((a, b) => b.tier - a.tier)) { steps.push({ id: b.id, patch: { tier: b.tier + 1 } }); rises++ } }
+    else { for (const b of srcStack.filter(b => b.tier > p && b.tier <= t).sort((a, b) => a.tier - b.tier)) { steps.push({ id: b.id, patch: { tier: b.tier - 1 } }); falls++ } }
+    steps.push({ id: box.id, patch: { tier: t } })
+  } else {
+    if (!(t >= 1 && t <= top + 1)) return no('bad-tier', '그 층은 없어요 (박스 사이를 비워둘 수는 없어요)')
+    if (top + 1 > zone.tiers) return no('full', `${zone.name} ${line.no}번째 줄 ${slot}번째 칸은 가득 찼어요 (최대 ${zone.tiers}층)`)
+    for (const b of tStack.filter(b => b.tier >= t).sort((a, b) => b.tier - a.tier)) { steps.push({ id: b.id, patch: { tier: b.tier + 1 } }); rises++ }          // 맨 위 박스부터 한 층씩 올림
+    steps.push({ id: box.id, patch: { zone_id: zone.id, line_id: line.id, slot_no: slot, tier: t } })
+    for (const b of srcStack.filter(b => b.tier > box.tier).sort((a, b) => a.tier - b.tier)) { steps.push({ id: b.id, patch: { tier: b.tier - 1 } }); falls++ }  // 아래층부터 한 층씩 내림
+  }
+  const to = where(zone, line, slot, t), after = { zone_id: zone.id, line_id: line.id, slot_no: slot, tier: t }
+  return { ok: true, mode: 'insert', same: sameStack, steps, fromTier: box.tier, toTier: t, rises, falls, target: { zoneName: zone.name, lineNo: line.no, slot },
+    text: `${to}에 놓여요.${rises ? ` 원래 그 자리에 있던 박스 ${rises}개는 한 층씩 올라가요.` : ''}${falls ? ` 원래 자리에서 위에 있던 박스 ${falls}개는 한 층씩 내려와요.` : ''}`,
+    done: `박스 ${box.box_number} 를 옮겼어요 → ${to}`,
+    undo: { kind: 'insert', boxId: box.id, target: { zoneId: before.zone_id, lineId: before.line_id, slot: before.slot_no, tier: before.tier }, after, label: `박스 ${box.box_number} → ${to}` } }
+}
+
+/** 방금 한 위치 변경을 되돌리는 계획. 그 사이에 자리가 또 바뀌었으면 거절 */
+export function planUndo(model, undo) {
+  const no = text => ({ ok: false, reason: 'changed', text })
+  if (!undo) return no('되돌릴 것이 없어요')
+  if (undo.kind === 'swap') {
+    const a = model.boxesById.get(undo.a), b = model.boxesById.get(undo.b)
+    if (!a || !b || !atPos(a, undo.aNow) || !atPos(b, undo.bNow)) return no('그 사이에 박스 자리가 또 바뀌어서 되돌릴 수 없어요')
+    return planPlace(model, a.id, { zoneId: b.zone_id, lineId: b.line_id, slot: b.slot_no, tier: b.tier }, 'swap')
+  }
+  const box = model.boxesById.get(undo.boxId)
+  if (!box || !atPos(box, undo.after)) return no('그 사이에 박스 자리가 또 바뀌어서 되돌릴 수 없어요')
+  return planPlace(model, box.id, undo.target, 'insert')
+}
+
 /** 충돌/중단으로 층에 빈틈이 생긴 칸을 찾아 1,2,3… 으로 다시 붙일 계획 (낮은 층부터 → 겹치지 않음) */
 export function stackRepairs(raw) {
   const groups = new Map()

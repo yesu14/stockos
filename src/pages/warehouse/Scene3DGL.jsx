@@ -36,7 +36,7 @@ function presetCam(kind, model, aspect, spread) {
   return kind === 'front' ? { ...d, yaw: Math.PI / 2, pitch: 0.2 } : { ...d, yaw: 0, pitch: 0.2 }
 }
 
-export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine, onNote, full = false, onToggleFull, onSwitchFull }) {
+export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPickBox, onPickZone, onFail, engine = 'gl', onEngine, onNote, full = false, onToggleFull, onSwitchFull, switchLabel }) {
   const wh = model.warehouse
   const toggle = () => onToggleFull && onToggleFull()          // 전체화면 틀은 페이지가 가짐 (3D 방식을 바꿔도, 평면도로 바꿔도 전체화면이 풀리지 않게)
   const boxRef = useRef(null), glRef = useRef(null), ovRef = useRef(null)
@@ -293,7 +293,7 @@ export default function Scene3DGL({ model, highlight, focus, activeZoneId, onPic
         <div className="flex-1" />
         {wh && <button type="button" className={`${btn} ${panel ? on : ''}`} style={panel ? { color: '#fff' } : undefined} aria-pressed={panel} onClick={() => setPanel(v => !v)}><span className="inline-flex items-center gap-1"><SlidersHorizontal size={13} /> 보기 설정</span></button>}
         {onEngine && <ViewPicker value={engine === 'three' ? 'three' : 'gl'} onChange={onEngine} />}
-        {full && onSwitchFull && <button type="button" className={btn} onClick={onSwitchFull} title="평면도 전체화면으로 바꾸기">🗺️ 평면도 전체화면</button>}
+        {full && onSwitchFull && <button type="button" className={btn} onClick={onSwitchFull} title={`${(switchLabel || '🗺️ 평면도 전체화면').replace(/^\S+\s/, '')}으로 바꾸기`}>{switchLabel || '🗺️ 평면도 전체화면'}</button>}
         {full && <button type="button" className={btn} onClick={toggle}>닫기 ✕</button>}
       </div>
       <div ref={boxRef} data-testid="scene3d" tabIndex={0} onKeyDown={onKeyDown}

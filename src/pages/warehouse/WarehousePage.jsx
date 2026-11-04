@@ -12,6 +12,8 @@ import { makeActions } from './whActions'
 import { buildModel, emptyRaw, rawReducer, searchAll, locationText, LIMITS, stackRepairs, round2 } from './whLogic'
 import { Btn, Modal, Field, inputCls, useAsk, usePrompt, EmptyNote, StockBadge, useFullscreenViews } from './ui'
 import FloorPlan from './FloorPlan'
+import AllView from './AllView'
+import ViewTabs from './ViewTabs'
 import Scene3D from './Scene3D'
 import Scene3DGL from './Scene3DGL'
 import ZoneDialog from './ZoneDialog'
@@ -25,7 +27,7 @@ const card = 'bg-surface-900 border border-surface-800 rounded-[32px]'
 
 // 새 3D(WebGL2)를 쓸 수 있는 기기인지 (안 되면 예전 3D 로)
 const glSupported = (() => { try { const c = document.createElement('canvas'), g = c.getContext('webgl2'); const ok = !!g; g?.getExtension('WEBGL_lose_context')?.loseContext(); return ok } catch { return false } })()
-const WH_VERSION = 'v48'
+const WH_VERSION = 'v49'
 const FS_FRAME = 'fixed inset-0 z-[90] flex flex-col gap-2 p-3 bg-surface-950'      // 전체화면일 때 틀 (평면도 / 3D 공통)
 // 3D 방식: 주소에 ?3d=gl / three / classic 이 있으면 그걸 우선, 아니면 마지막에 고른 방식(기억해 둔 것)
 const load3d = () => {
@@ -140,6 +142,9 @@ export default function WarehousePage() {
   const [activeZone, setActiveZone] = useState(null)
   const [zoneForm, setZoneForm] = useState(null), [zoneDetail, setZoneDetail] = useState(null), [boxId, setBoxId] = useState(null), [pickerFor, setPickerFor] = useState(null), [whDialog, setWhDialog] = useState(false), [stockCheck, setStockCheck] = useState(false), [moveFor, setMoveFor] = useState(null), [view3d, setView3d] = useState(load3d), [fallbackNote, setFallbackNote] = useState('')
   const planRef = useRef(null)
+  const [leftTab, setLeftTabRaw] = useState(() => { try { return localStorage.getItem('whLeft') === 'all' ? 'all' : 'plan' } catch { return 'plan' } })        // 왼쪽 카드: 평면도 / 전체보기
+  const setLeftTab = useCallback(k => { setLeftTabRaw(k); try { localStorage.setItem('whLeft', k) } catch { /* 저장 안 돼도 괜찮아요 */ } }, [])
+  const switchLabel = leftTab === 'all' ? '📚 전체보기 전체화면' : '🗺️ 평면도 전체화면'
   const fsv = useFullscreenViews()                       // 평면도 / 3D 전체화면 (서로 바꿀 수 있고, 3D 방식을 바꿔도 풀리지 않음)
 
   const switch3d = useCallback((kind, persist = true) => { setView3d(kind); if (persist) { setFallbackNote(''); try { localStorage.setItem('wh3d', kind) } catch { /* 저장 안 돼도 괜찮아요 */ } } }, [])
@@ -225,8 +230,11 @@ export default function WarehousePage() {
         <div className="grid xl:grid-cols-[minmax(0,1fr)_440px] gap-4 items-start">
           <section ref={planRef} className={`${card} p-3 sm:p-4 h-[78vh] min-h-[520px]`}>
             <div data-testid="fs-plan" className={fsv.cur === 'plan' ? FS_FRAME : 'h-full'}>
-              <FloorPlan model={model} canEdit={canEdit} highlight={highlight} focus={focus} onSelectZone={setActiveZone} onNotify={m => toast(m)} actions={planActions}
-                full={fsv.cur === 'plan'} onToggleFull={() => fsv.toggle('plan')} onSwitchFull={() => fsv.enter('v3d')} />
+              {leftTab === 'plan'
+                ? <FloorPlan model={model} canEdit={canEdit} highlight={highlight} focus={focus} onSelectZone={setActiveZone} onNotify={m => toast(m)} actions={planActions}
+                    tabs={<ViewTabs value="plan" onChange={setLeftTab} />} full={fsv.cur === 'plan'} onToggleFull={() => fsv.toggle('plan')} onSwitchFull={() => fsv.enter('v3d')} />
+                : <AllView model={model} canEdit={canEdit} highlight={highlight} focus={focus} onOpenBox={setBoxId} onPlace={actions.placeBox} onUndo={actions.undoPlace}
+                    tabs={<ViewTabs value="all" onChange={setLeftTab} />} full={fsv.cur === 'plan'} onToggleFull={() => fsv.toggle('plan')} onSwitchFull={() => fsv.enter('v3d')} />}
             </div>
           </section>
           <div className="space-y-4 min-w-0">
@@ -240,10 +248,10 @@ export default function WarehousePage() {
                 {view3d !== 'classic' && glSupported
                   ? <Scene3DGL key={view3d} engine={view3d === 'three' ? 'three' : 'gl'} onNote={setFallbackNote} model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                       onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={switch3d}
-                      onFail={failed3d} full={fsv.cur === 'v3d'} onToggleFull={() => fsv.toggle('v3d')} onSwitchFull={() => fsv.enter('plan')} />
+                      onFail={failed3d} full={fsv.cur === 'v3d'} onToggleFull={() => fsv.toggle('v3d')} onSwitchFull={() => fsv.enter('plan')} switchLabel={switchLabel} />
                   : <Scene3D model={model} highlight={highlight} focus={focus} activeZoneId={activeZone}
                       onPickBox={setBoxId} onPickZone={id => setZoneDetail({ id, line: 0 })} onEngine={glSupported ? switch3d : undefined}
-                      full={fsv.cur === 'v3d'} onToggleFull={() => fsv.toggle('v3d')} onSwitchFull={() => fsv.enter('plan')} />}
+                      full={fsv.cur === 'v3d'} onToggleFull={() => fsv.toggle('v3d')} onSwitchFull={() => fsv.enter('plan')} switchLabel={switchLabel} />}
               </div>
             </section>
             <section className={card}>
@@ -256,7 +264,7 @@ export default function WarehousePage() {
       {zoneDetail && <ZoneDetail zoneId={zoneDetail.id} initialLine={zoneDetail.line} model={model} canEdit={canEdit} highlight={highlight} actions={actions} prompt={prompt}
         onOpenBox={setBoxId} onEditZone={id => setZoneForm({ mode: 'edit', id })} onClose={() => setZoneDetail(null)} />}
       {boxId && <BoxPanel boxId={boxId} model={model} canEdit={canEdit} actions={actions} onAddProducts={setPickerFor} onLocate={locate} onMove={setMoveFor} onClose={() => setBoxId(null)} />}
-      {moveFor && <MoveBoxDialog boxId={moveFor} model={model} onClose={() => setMoveFor(null)} onSubmit={async t => { if (await actions.moveBox(moveFor, t)) setMoveFor(null) }} />}
+      {moveFor && <MoveBoxDialog boxId={moveFor} model={model} onClose={() => setMoveFor(null)} onPlace={actions.placeBox} />}
       {pickerFor && model.boxesById.get(pickerFor) && <ProductPicker boxLabel={`박스 ${model.boxesById.get(pickerFor).box_number}`} loadCatalog={api.loadCatalog} placed={model.placed} onConfirm={pickBoxes} onClose={() => setPickerFor(null)} />}
       {whDialog && model.warehouse && <WarehouseDialog wh={model.warehouse} onClose={() => setWhDialog(false)} onSubmit={async v => { if (await actions.updateWarehouse(v)) setWhDialog(false) }} />}
       {stockCheck && <StockCheck model={model} loadCatalog={api.loadCatalog} onFind={name => { setQuery(name); setStockCheck(false) }} onClose={() => setStockCheck(false)} />}

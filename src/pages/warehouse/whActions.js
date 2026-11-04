@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════
 import {
   LIMITS, buildModel, checkZoneRect, REASON_TEXT, round2, normNumber, findBoxByNumber,
-  nextBoxNumber, stackAt, locationText, boxesAbove, boxesLostBy, itemKey, checkOfficeSpot, planBoxMove, stackRepairs,
+  nextBoxNumber, stackAt, locationText, boxesAbove, boxesLostBy, itemKey, checkOfficeSpot, planBoxMove, stackRepairs, planPlace, planUndo,
   checkWarehouseRect, officeInside, snap,
 } from './whLogic'
 
@@ -238,6 +238,31 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
     notify.success(`박스를 옮겼어요 → ${plan.target.zoneName} ${plan.target.lineNo}번째 줄 ${plan.target.slot}번째 칸 ${plan.toTier}층`)
     return plan
   })
+  /** 박스를 정확한 자리에 놓기 (끼워 넣기 'insert' / 서로 바꾸기 'swap'). 성공하면 계획(plan)을 돌려줌 — plan.undo 로 되돌릴 수 있음 */
+  const runPlan = async plan => {
+    try { for (const st of plan.steps) dispatch({ type: 'box/patch', row: await api.patchBox(st.id, st.patch) }) }          // 겹치지 않는 순서로 하나씩
+    catch (e) {                                                                                                          // 중간에 끊기면 서버 상태를 다시 읽고, 층 빈틈/임시 층을 붙여서 정리
+      try { await reload(); for (const f of stackRepairs(getRaw())) dispatch({ type: 'box/patch', row: await api.patchBox(f.id, { tier: f.tier }) }) } catch { /* 네트워크 문제면 그대로 */ }
+      throw e
+    }
+  }
+  const placeBox = (boxId, target, mode = 'insert') => guard(async () => {
+    const plan = planPlace(model(), boxId, target, mode)
+    if (!plan.ok) throw soft(plan.text)
+    await runPlan(plan); notify.success(plan.done); return plan
+  })
+  const swapBoxes = (aId, bId) => guard(async () => {
+    const b = model().boxesById.get(bId); if (!b) throw soft('박스를 찾을 수 없어요')
+    const plan = planPlace(model(), aId, { zoneId: b.zone_id, lineId: b.line_id, slot: b.slot_no, tier: b.tier }, 'swap')
+    if (!plan.ok) throw soft(plan.text)
+    await runPlan(plan); notify.success(plan.done); return plan
+  })
+  /** 방금 한 위치 변경 되돌리기 */
+  const undoPlace = undo => guard(async () => {
+    const plan = planUndo(model(), undo)
+    if (!plan.ok) throw soft(plan.text)
+    await runPlan(plan); notify.success('되돌렸어요'); return { ...plan, undo: null }
+  })
   /** 중간에 끊겨서 층에 빈틈이 생겼다면 자동으로 붙여줌 (공중에 뜬 박스 방지) */
   const repairStacks = () => guard(async () => {
     const fixes = stackRepairs(getRaw())
@@ -284,6 +309,6 @@ export function makeActions({ api, getRaw, dispatch, ask, notify }) {
   return {
     reload, createWarehouse, updateWarehouse, resizeWarehouse, deleteWarehouse, addFixture, moveFixture, removeFixture,
     createZone, moveZone, updateZone, deleteZone, addLine, setLineSlots, deleteLine,
-    addBox, renameBox, deleteBox, moveBox, repairStacks, addItems, setQty, removeItem,
+    addBox, renameBox, deleteBox, moveBox, placeBox, swapBoxes, undoPlace, repairStacks, addItems, setQty, removeItem,
   }
 }

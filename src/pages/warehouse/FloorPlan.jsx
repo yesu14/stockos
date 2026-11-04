@@ -178,7 +178,7 @@ const hitOf = el => {
   return i < 0 ? { kind: s, id: null } : { kind: s.slice(0, i), id: s.slice(i + 1) }
 }
 
-export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZone, onNotify, actions, full = false, onToggleFull, onSwitchFull }) {
+export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZone, onNotify, actions, full = false, onToggleFull, onSwitchFull, tabs = null }) {
   const wh = model.warehouse
   const toggle = () => onToggleFull && onToggleFull()          // 전체화면 틀은 페이지가 가짐 (3D 전체화면과 서로 바꿀 수 있게)
   const boxRef = useRef(null), svgRef = useRef(null)
@@ -445,7 +445,7 @@ export default function FloorPlan({ model, canEdit, highlight, focus, onSelectZo
   return (
     <div className={full ? 'flex flex-col flex-1 min-h-0 gap-2' : 'flex flex-col h-full gap-2'}>
       <div className="flex items-center gap-2 flex-wrap shrink-0">
-        <div className="flex items-center gap-2 mr-1"><span className="text-lg">🗺️</span><h2 className="font-bold text-white text-sm">평면도</h2></div>
+        {tabs || <div className="flex items-center gap-2 mr-1"><span className="text-lg">🗺️</span><h2 className="font-bold text-white text-sm">평면도</h2></div>}
         {canEdit && tools.map(([k, label, icon]) => (
           <button key={k} type="button" onClick={() => changeTool(k)}
             className={`inline-flex items-center gap-1.5 pl-2.5 pr-3 py-1.5 rounded-2xl text-xs font-bold border transition-all active:scale-95 ${tool === k ? 'bg-primary-500 border-primary-500 shadow-lg shadow-primary-500/25' : 'bg-surface-800 border-surface-700 text-surface-200 hover:bg-surface-700'}`}
